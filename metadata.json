@@ -1,0 +1,6 @@
+{
+  "name": "采购物料跟踪及库存监控系统",
+  "description": "高效的采购订单（PO）生命周期追溯、大类交付周期分析台账，配有实时库存水位（ROP）阈值调节和多项目到货登记预警看板。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
