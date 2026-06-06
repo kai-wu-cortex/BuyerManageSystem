@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord } from './types';
+import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote } from './types';
+import { db, handleFirestoreError, OperationType } from './firebase';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
 import Dashboard from './components/Dashboard';
 import POList from './components/POList';
 import SampleTracker from './components/SampleTracker';
@@ -18,8 +20,25 @@ import {
   Menu,
   X,
   ChevronDown,
-  StickyNote
+  StickyNote as StickyNoteIcon
 } from 'lucide-react';
+
+// Helper for chunked batch writes to avoid 500 operation limit
+const batchWriteDocs = async (
+  dbRef: any,
+  updates: { ref: any; data?: any; type: 'set' | 'delete' }[]
+) => {
+  const CHUNK_SIZE = 450;
+  for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
+    const batch = writeBatch(dbRef);
+    const chunk = updates.slice(i, i + CHUNK_SIZE);
+    for (const op of chunk) {
+      if (op.type === 'set') batch.set(op.ref, op.data);
+      if (op.type === 'delete') batch.delete(op.ref);
+    }
+    await batch.commit();
+  }
+};
 
 export default function App() {
   const { starredIds } = useStarredPOs();
@@ -54,10 +73,11 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
 
-  // Procurement Datasets with LocalPersistence
+  // Procurement Datasets with Firebase Synchronization
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [samples, setSamples] = useState<SampleRecord[]>([]);
+  const [notes, setNotes] = useState<Record<string, StickyNote>>({});
 
   // Time Tracker state
   const [currentTime, setCurrentTime] = useState('');
@@ -65,80 +85,240 @@ export default function App() {
   // Clear Data state
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
 
-  // Initial load
+  const cleanUndefined = <T extends any>(obj: T): T => {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) {
+      return obj.map(cleanUndefined).filter(v => v !== undefined) as unknown as T;
+    }
+    const result: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        result[key] = cleanUndefined(value);
+      }
+    }
+    return result as T;
+  };
+
+  // Initial load & Real-time Firebase Sync
   useEffect(() => {
+    // 1. Sync Purchase Orders from localStorage
     const savedPO = localStorage.getItem("purchase_orders");
-    const savedInv = localStorage.getItem("inventory_stock");
-    const savedSamples = localStorage.getItem("sample_records");
-
     if (savedPO) {
-      setPurchaseOrders(JSON.parse(savedPO));
-    } else {
-      setPurchaseOrders([]);
+      try {
+        const parsed = JSON.parse(savedPO) as PurchaseOrder[];
+        const sorted = parsed.sort((a, b) => b.date.localeCompare(a.date));
+        setPurchaseOrders(sorted);
+      } catch (e) {
+        console.error("Failed to parse POs from localStorage:", e);
+      }
     }
 
-    if (savedInv) {
-      setInventory(JSON.parse(savedInv));
-    } else {
-      setInventory([]);
-    }
-
-    if (savedSamples) {
-      setSamples(JSON.parse(savedSamples));
-    } else {
-      const INITIAL_SAMPLES: SampleRecord[] = [
-        {
-          id: "SMP-2026-0001",
-          name: "稀释剂改进样品",
-          spec: "102# 改性型",
-          category: "原材料",
-          supplier: "东莞市丰彩新材料有限公司",
-          requestDate: "2026-05-10",
-          status: "合格启用",
-          quantity: 2,
-          unit: "KG",
-          courierInfo: "顺丰速运: SF1428571428",
-          assignedTo: "李工",
-          notes: "粘度以及干燥速度符合打样标准，已经在3001批次试用。"
-        },
-        {
-          id: "SMP-2026-0002",
-          name: "高粘结粘合剂",
-          spec: "BHG-7501升级款",
-          category: "包装物",
-          supplier: "广东邦固化学科技有限公司",
-          requestDate: "2026-05-25",
-          status: "测试中",
-          quantity: 1,
-          unit: "KG",
-          courierInfo: "中通快递: ZT88992211",
-          assignedTo: "王工",
-          notes: "正在进行抗剥离强度测试，初步表现良好。"
+    // 2. Sync Inventory Stock
+    const unsubscribeInv = onSnapshot(collection(db, "inventory_stock"), async (snapshot) => {
+      if (snapshot.empty) {
+        const savedInv = localStorage.getItem("inventory_stock");
+        if (savedInv) {
+          try {
+            const parsed = JSON.parse(savedInv) as InventoryItem[];
+            const updates = [];
+            for (const item of parsed) {
+              updates.push({ ref: doc(db, "inventory_stock", item.code), data: cleanUndefined(item), type: 'set' as const });
+            }
+            await batchWriteDocs(db, updates);
+          } catch (e) {
+            console.error("Failed to seed inventory stock to Firebase:", e);
+          }
         }
-      ];
-      setSamples(INITIAL_SAMPLES);
-      localStorage.setItem('sample_records', JSON.stringify(INITIAL_SAMPLES));
-    }
+      } else {
+        const liveInv: InventoryItem[] = [];
+        snapshot.forEach(doc => {
+          liveInv.push(doc.data() as InventoryItem);
+        });
+        setInventory(liveInv);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "inventory_stock");
+    });
 
-    // Standard high contrast UTC simulated clock
+    // 3. Sync Sample Records
+    const unsubscribeSamples = onSnapshot(collection(db, "sample_records"), async (snapshot) => {
+      if (snapshot.empty) {
+        const savedSamples = localStorage.getItem("sample_records");
+        const parsedSamples = savedSamples ? JSON.parse(savedSamples) : [
+          {
+            id: "SMP-2026-0001",
+            name: "稀释剂改进样品",
+            spec: "102# 改性型",
+            category: "原材料",
+            supplier: "东莞市丰彩新材料有限公司",
+            requestDate: "2026-05-10",
+            status: "合格启用",
+            quantity: 2,
+            unit: "KG",
+            courierInfo: "顺丰速运: SF1428571428",
+            assignedTo: "李工",
+            notes: "粘度以及干燥速度符合打样标准，已经在3001批次试用。"
+          },
+          {
+            id: "SMP-2026-0002",
+            name: "高粘结粘合剂",
+            spec: "BHG-7501升级款",
+            category: "包装物",
+            supplier: "广东邦固化学科技有限公司",
+            requestDate: "2026-05-25",
+            status: "测试中",
+            quantity: 1,
+            unit: "KG",
+            courierInfo: "中通快递: ZT88992211",
+            assignedTo: "王工",
+            notes: "正在进行抗剥离强度测试，初步表现良好。"
+          }
+        ];
+        try {
+          const updates = [];
+          for (const s of parsedSamples) {
+            try {
+              const size = new Blob([JSON.stringify(s)]).size;
+              if (size > 900000) {
+                console.warn(`Sample ${s.id} is too large (${size} bytes). Obscuring images to fit inside limits.`);
+                delete s.imgUrl;
+                delete s.imgUrls;
+                s.notes = s.notes + "\n(⚠️由于图片体积超过云端容量限制，历史原图未同步上云，请重新上传压缩图片)";
+              }
+              updates.push({ ref: doc(db, "sample_records", s.id), data: cleanUndefined(s), type: 'set' as const });
+            } catch (err) {
+              console.error(`Failed to prepare individual sample ${s.id} to Firebase:`, err);
+            }
+          }
+          await batchWriteDocs(db, updates);
+        } catch (e) {
+          console.error("Failed to seed samples to Firebase:", e);
+        }
+      } else {
+        const liveSamples: SampleRecord[] = [];
+        snapshot.forEach(doc => {
+          liveSamples.push(doc.data() as SampleRecord);
+        });
+        setSamples(liveSamples);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "sample_records");
+    });
+
+    // 4. Sync Order Sticky Notes
+    const unsubscribeNotes = onSnapshot(collection(db, "order_sticky_notes"), async (snapshot) => {
+      if (snapshot.empty) {
+        const savedNotes = localStorage.getItem("order_sticky_notes");
+        if (savedNotes) {
+          try {
+            const parsed = JSON.parse(savedNotes) as Record<string, StickyNote>;
+            const updates = [];
+            for (const poId of Object.keys(parsed)) {
+              updates.push({ ref: doc(db, "order_sticky_notes", poId), data: cleanUndefined(parsed[poId]), type: 'set' as const });
+            }
+            await batchWriteDocs(db, updates);
+          } catch (e) {
+            console.error("Failed to seed sticky notes to Firebase:", e);
+          }
+        }
+      } else {
+        const liveNotes: Record<string, StickyNote> = {};
+        snapshot.forEach(doc => {
+          liveNotes[doc.id] = doc.data() as StickyNote;
+        });
+        setNotes(liveNotes);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "order_sticky_notes");
+    });
+
+    // Clock tracker
     const updateTime = () => {
       const now = new Date();
       setCurrentTime(now.toLocaleString('zh-CN', { hour12: false }) + ' (UTC)');
     };
     updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
+    const clockInterval = setInterval(updateTime, 1000);
+
+    return () => {
+      unsubscribeInv();
+      unsubscribeSamples();
+      unsubscribeNotes();
+      clearInterval(clockInterval);
+    };
   }, []);
 
-  // Sync state values on changes
+  // Sync state values on changes directly to Firebase
   const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
-    setPurchaseOrders(updatedOrders);
-    localStorage.setItem("purchase_orders", JSON.stringify(updatedOrders));
+    try {
+      localStorage.setItem("purchase_orders", JSON.stringify(updatedOrders));
+      setPurchaseOrders(updatedOrders);
+    } catch (error) {
+      console.error(error);
+    }
   };
 
-  const handleUpdateInventory = (updatedInventory: InventoryItem[]) => {
-    setInventory(updatedInventory);
-    localStorage.setItem("inventory_stock", JSON.stringify(updatedInventory));
+  const handleUpdateInventory = async (updatedInventory: InventoryItem[]) => {
+    try {
+      const updates = [];
+      for (const item of updatedInventory) {
+        updates.push({ ref: doc(db, "inventory_stock", item.code), data: cleanUndefined(item), type: 'set' as const });
+      }
+      const updatedCodes = new Set(updatedInventory.map(i => i.code));
+      for (const item of inventory) {
+        if (!updatedCodes.has(item.code)) {
+          updates.push({ ref: doc(db, "inventory_stock", item.code), type: 'delete' as const });
+        }
+      }
+      await batchWriteDocs(db, updates);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, "inventory_stock");
+    }
+  };
+
+  const handleUpdateSamples = async (updatedSamples: SampleRecord[]) => {
+    try {
+      const updates = [];
+      for (const s of updatedSamples) {
+        const size = new Blob([JSON.stringify(s)]).size;
+        if (size > 900000) {
+          console.warn(`Sample ${s.id} is too large (${size} bytes). Truncating images to sync.`);
+          delete s.imgUrl;
+          delete s.imgUrls;
+          if (!s.notes.includes("超出限制")) {
+            s.notes = s.notes + "\n(⚠️由于图片体积超过云端容量限制，历史原图未同步上云，请重新上传压缩图片)";
+          }
+        }
+        updates.push({ ref: doc(db, "sample_records", s.id), data: cleanUndefined(s), type: 'set' as const });
+      }
+      const updatedIds = new Set(updatedSamples.map(x => x.id));
+      for (const s of samples) {
+        if (!updatedIds.has(s.id)) {
+          updates.push({ ref: doc(db, "sample_records", s.id), type: 'delete' as const });
+        }
+      }
+      await batchWriteDocs(db, updates);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, "sample_records");
+    }
+  };
+
+  const handleUpdateNotes = async (updatedNotes: Record<string, StickyNote>) => {
+    try {
+      const updates = [];
+      for (const poId of Object.keys(updatedNotes)) {
+        updates.push({ ref: doc(db, "order_sticky_notes", poId), data: cleanUndefined(updatedNotes[poId]), type: 'set' as const });
+      }
+      const updatedIds = new Set(Object.keys(updatedNotes));
+      for (const poId of Object.keys(notes)) {
+        if (!updatedIds.has(poId)) {
+          updates.push({ ref: doc(db, "order_sticky_notes", poId), type: 'delete' as const });
+        }
+      }
+      await batchWriteDocs(db, updates);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, "order_sticky_notes");
+    }
   };
 
   // Add individual orders
@@ -251,16 +431,40 @@ export default function App() {
     alert(`🎉 成功为您依据再订货点，自动编制了全新的在途采购单 ${newPO.id}！\n现在已经在待审核列表中生成，您可以直接修改价格及货期。`);
   };
 
-  const handleClearAllData = () => {
+  const handleClearAllData = async () => {
     if (!isConfirmingClear) {
       setIsConfirmingClear(true);
       setTimeout(() => setIsConfirmingClear(false), 3000); // reset if not confirmed in 3s
       return;
     }
+    
+    // Clean all collections from Firestore but leave purchase_orders alone
+    try {
+      const batchDelete = async (colPath: string) => {
+        const querySnapshot = await getDocs(collection(db, colPath));
+        const updates = [];
+        for (const d of querySnapshot.docs) {
+          updates.push({ ref: doc(db, colPath, d.id), type: 'delete' as const });
+        }
+        await batchWriteDocs(db, updates);
+      };
+      
+      await batchDelete("inventory_stock");
+      await batchDelete("sample_records");
+      await batchDelete("order_sticky_notes");
+    } catch (error) {
+      console.error("Failed to clear Firebase collections:", error);
+    }
+
+    // Clean all data locally
     localStorage.clear();
     sessionStorage.clear();
     setPurchaseOrders([]);
     setInventory([]);
+    setSamples([]);
+    setNotes({});
+    setIsConfirmingClear(false);
+    
     // Force page reload to ensure any other cached state like samples is also fully reset
     window.location.reload();
   };
@@ -323,7 +527,7 @@ export default function App() {
               { id: 'dashboard', label: '采购物料大屏', icon: <BarChart3 className="w-5 h-5 shrink-0" /> },
               { id: 'ledger', label: '采购单台账', icon: <BookOpen className="w-5 h-5 shrink-0" /> },
               { id: 'inventory', label: '样品获取与打样追踪', icon: <Layers className="w-5 h-5 shrink-0" /> },
-              { id: 'notes', label: '订单便签与流转', icon: <StickyNote className="w-5 h-5 shrink-0" /> }
+              { id: 'notes', label: '订单便签与流转', icon: <StickyNoteIcon className="w-5 h-5 shrink-0" /> }
             ].map(tab => {
               const isActive = activeTab === tab.id;
               return (
@@ -454,6 +658,7 @@ export default function App() {
                   setTargetSearchTerm(poId);
                   handleTabChange('notes');
                 }}
+                notes={notes}
               />
             ) : (
               <>
@@ -485,6 +690,7 @@ export default function App() {
                       setTargetSearchTerm(poId);
                       handleTabChange('notes');
                     }}
+                    notes={notes}
                   />
                 </div>
 
@@ -496,10 +702,7 @@ export default function App() {
                       handleTabChange('ledger');
                     }}
                     samples={samples}
-                    onSamplesChange={(updated) => {
-                      setSamples(updated);
-                      localStorage.setItem('sample_records', JSON.stringify(updated));
-                    }}
+                    onSamplesChange={handleUpdateSamples}
                   />
                 </div>
 
@@ -513,24 +716,15 @@ export default function App() {
                     }}
                     autoAddNote={autoAddNotePOId}
                     onClearAutoAddNote={() => setAutoAddNotePOId(null)}
+                    notes={notes}
+                    onNotesChange={handleUpdateNotes}
                   />
                 </div>
               </>
             )}
           </main>
 
-          {/* Modern Footer bar */}
-          <footer className="bg-slate-900 border-t border-slate-800 px-6 py-3.5 text-slate-400 flex flex-col md:flex-row justify-between items-start md:items-center gap-2 text-[10px] font-mono tracking-wider">
-            <div className="flex flex-wrap gap-x-6 gap-y-1">
-              <span>TOTAL POs: <strong className="text-white">{purchaseOrders.length}</strong></span>
-              <span>SHIPPING METHODS: <strong className="text-white font-mono">EXPRESS/SEA/AIR</strong></span>
-              <span>OUT OF SAFETY LIMIT: <strong className="text-red-400">{inventory.filter(item => item.currentStock < item.safetyStock).length} SKUs</strong></span>
-            </div>
-            <div className="flex items-center gap-2 text-slate-300">
-              <span className="inline-block w-2 h-2 rounded-full bg-[#22C55E] animate-pulse"></span>
-              <span className="uppercase text-[9px] font-bold">SECURE ENCRYPTION ACTIVE</span>
-            </div>
-          </footer>
+
         </div>
 
       </div>

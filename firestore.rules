@@ -1,0 +1,39 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reuseable Global Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 2. Purchase Orders Collection
+    match /purchase_orders/{poId} {
+      allow read, write: if true; // Set to lenient write validation during development/preview integration
+    }
+
+    // 3. Inventory Stock Collection
+    match /inventory_stock/{itemCode} {
+      allow read, write: if true;
+    }
+
+    // 4. Sample Records Collection
+    match /sample_records/{sampleId} {
+      allow read, write: if true;
+    }
+
+    // 5. Sticky Notes & Dialogue Comments
+    match /order_sticky_notes/{poId} {
+      allow read, write: if true;
+    }
+  }
+}

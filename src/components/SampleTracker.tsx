@@ -232,8 +232,45 @@ export default function SampleTracker({
     selection.addRange(newRange);
   };
 
+  const compressImage = (file: File, maxWidth = 800): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', 0.8));
+          } else {
+            resolve(event.target?.result as string);
+          }
+        };
+        img.onerror = () => reject(new Error('Failed to load image for compression'));
+        if (typeof event.target?.result === 'string') {
+          img.src = event.target.result;
+        } else {
+          reject(new Error('Invalid reader result'));
+        }
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Handle Clipboard Paste directly targeting rich text containing mixed images/multiline text
-  const handleContentEditablePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+  const handleContentEditablePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
     const items = e.clipboardData.items;
     let containsImage = false;
 
@@ -243,14 +280,14 @@ export default function SampleTracker({
         const file = items[i].getAsFile();
         if (file) {
           e.preventDefault(); // Suspend standard text/file binary chunk bypass
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const result = event.target?.result as string;
-            insertImageAtCursor(result);
-            setParseLog(prev => [...prev, `📸 剪贴板富文本通道已嵌入截图 (${Math.round(result.length / 1024)} KB)`]);
+          try {
+            const compressedBase64 = await compressImage(file);
+            insertImageAtCursor(compressedBase64);
+            setParseLog(prev => [...prev, `📸 剪贴板富文本通道已嵌入截图 (${Math.round(compressedBase64.length / 1024)} KB)`]);
             syncContentEditable();
-          };
-          reader.readAsDataURL(file);
+          } catch (error) {
+            console.error('Issue compressing pasted image:', error);
+          }
         }
       }
     }
@@ -263,18 +300,18 @@ export default function SampleTracker({
   };
 
   // Handle local uploaded files - support parsing multiple files directly into the editor
-  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      Array.from(e.target.files).forEach((file: any) => {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const result = event.target?.result as string;
-          insertImageAtCursor(result);
-          setParseLog(prev => [...prev, `📎 已成功从本地选中并插入图片 到富文本框: ${file.name}`]);
+      for (const file of Array.from(e.target.files)) {
+        try {
+          const compressedBase64 = await compressImage(file as File);
+          insertImageAtCursor(compressedBase64);
+          setParseLog(prev => [...prev, `📎 已成功从本地选中并插入图片 到富文本框: ${(file as File).name}`]);
           syncContentEditable();
-        };
-        reader.readAsDataURL(file);
-      });
+        } catch (error) {
+           console.error('Issue compressing uploaded image:', error);
+        }
+      }
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -699,11 +736,10 @@ export default function SampleTracker({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
-        
-        {/* LEFT SIDEBAR: Title banner & Stacked stats cards, as sketched in user's layout plan */}
-        <div className="lg:col-span-1 space-y-4">
-          <div className="border-b border-slate-200 pb-3">
+      {/* TOP HEADER AREA: Title banner & Stacked stats cards, moved to top as requested */}
+      <div className="space-y-4">
+        <div className="flex flex-col md:flex-row md:items-end justify-between border-b border-slate-200 pb-3 gap-4">
+          <div>
             <h2 className="text-lg font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-blue-600 shrink-0" />
               <span>新样获取与打样</span>
@@ -712,37 +748,36 @@ export default function SampleTracker({
               SAMPLE CONTROL STATION
             </p>
           </div>
-
-          {/* Vertical Stack of Stats Cards */}
-          <div className="flex flex-col gap-3">
-            {[
-              { label: '样品总数', value: samples.length, icon: <Layers className="w-4.5 h-4.5 text-slate-500" />, color: 'bg-slate-50 border-slate-200' },
-              { label: '在途获取中', value: samples.filter(s => s.status === '寄送中' || s.status === '申请中').length, icon: <Truck className="w-4.5 h-4.5 text-amber-500" />, color: 'bg-amber-50/50 border-amber-200' },
-              { label: '测试打样中', value: samples.filter(s => s.status === '测试中').length, icon: <Clock className="w-4.5 h-4.5 text-purple-500" />, color: 'bg-purple-50/50 border-purple-200' },
-              { label: '测试合格启用', value: samples.filter(s => s.status === '合格启用').length, icon: <CheckCircle className="w-4.5 h-4.5 text-emerald-500" />, color: 'bg-emerald-50/50 border-emerald-205' },
-              { label: '品质退回/不合格', value: samples.filter(s => s.status === '不合格退回').length, icon: <AlertTriangle className="w-4.5 h-4.5 text-rose-500" />, color: 'bg-rose-50/50 border-rose-205' }
-            ].map((stat, i) => (
-              <div key={i} className={`p-4 rounded-xl border flex items-center justify-between ${stat.color} shadow-xs hover:shadow-sm transition-all duration-200`}>
-                <div className="space-y-1">
-                  <span className="text-[10px] text-slate-500 uppercase font-sans font-bold">{stat.label}</span>
-                  <div className="font-mono text-xl font-bold text-slate-800">{stat.value}</div>
-                </div>
-                {stat.icon}
-              </div>
-            ))}
-          </div>
-
-          {/* Fast Cache Reset Option tucked below stats */}
           <button
             onClick={resetToSeeds}
-            className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-[10px] font-bold font-sans transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1"
+            className="w-full md:w-auto px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-[10px] font-bold font-sans transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1"
           >
             🔄 恢复演示模拟样品
           </button>
         </div>
 
-        {/* RIGHT AREA: Active controls and tracking cards grid */}
-        <div className="lg:col-span-3 space-y-6">
+        {/* Horizontal Stack of Stats Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {[
+            { label: '样品总数', value: samples.length, icon: <Layers className="w-4.5 h-4.5 text-slate-500" />, color: 'bg-slate-50 border-slate-200' },
+            { label: '在途获取中', value: samples.filter(s => s.status === '寄送中' || s.status === '申请中').length, icon: <Truck className="w-4.5 h-4.5 text-amber-500" />, color: 'bg-amber-50/50 border-amber-200' },
+            { label: '测试打样中', value: samples.filter(s => s.status === '测试中').length, icon: <Clock className="w-4.5 h-4.5 text-purple-500" />, color: 'bg-purple-50/50 border-purple-200' },
+            { label: '测试合格启用', value: samples.filter(s => s.status === '合格启用').length, icon: <CheckCircle className="w-4.5 h-4.5 text-emerald-500" />, color: 'bg-emerald-50/50 border-emerald-205' },
+            { label: '品质退回/不合格', value: samples.filter(s => s.status === '不合格退回').length, icon: <AlertTriangle className="w-4.5 h-4.5 text-rose-500" />, color: 'bg-rose-50/50 border-rose-205' }
+          ].map((stat, i) => (
+            <div key={i} className={`p-4 rounded-xl border flex items-center justify-between ${stat.color} shadow-xs hover:shadow-sm transition-all duration-200`}>
+              <div className="space-y-1">
+                <span className="text-[10px] text-slate-500 uppercase font-sans font-bold">{stat.label}</span>
+                <div className="font-mono text-xl font-bold text-slate-800">{stat.value}</div>
+              </div>
+              {stat.icon}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* MAIN AREA: Active controls and tracking cards grid */}
+      <div className="space-y-6">
           
           {/* Main subheader & Action Trigger at top of main panel */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4 bg-slate-50/30 p-4 rounded-xl border border-slate-150">
@@ -1257,8 +1292,6 @@ export default function SampleTracker({
             </div>
           ))
         )}
-      </div>
-
       </div>
       </div>
 

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PurchaseOrder, POStatus, PurchaseExecutionStatus, InboundStatus, OrderItem } from '../types';
 import { getFlatLedgerRows, FlatLedgerRow, parseClipboardLine } from '../utils/ledgerHelper';
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
@@ -30,6 +31,7 @@ interface POListProps {
   targetSearchTerm?: string;
   onClearTargetSearchTerm?: () => void;
   onNavigateToNotes?: (poId: string, autoAdd?: boolean) => void;
+  notes?: Record<string, any>;
 }
 
 // Supplier typical material fallback
@@ -233,7 +235,8 @@ export default function POList({
   onReplaceOrders, 
   targetSearchTerm, 
   onClearTargetSearchTerm,
-  onNavigateToNotes 
+  onNavigateToNotes,
+  notes
 }: POListProps) {
   const { starredIds, toggleStar } = useStarredPOs();
 
@@ -242,32 +245,33 @@ export default function POList({
 
   useEffect(() => {
     const handleLoadNotes = () => {
-      const savedNotes = localStorage.getItem('order_sticky_notes');
-      if (savedNotes) {
+      const activeNotes = notes || (() => {
+        const savedNotes = localStorage.getItem('order_sticky_notes');
         try {
-          const parsed = JSON.parse(savedNotes);
-          const map: Record<string, number> = {};
-          Object.keys(parsed).forEach(poId => {
-            const entry = parsed[poId];
-            if (entry) {
-              if (Array.isArray(entry.notesList)) {
-                const nonEmptyCount = entry.notesList.filter((n: any) => n.noteText && n.noteText.trim().length > 0).length;
-                if (nonEmptyCount > 0) {
-                  map[poId] = nonEmptyCount;
-                }
-              } else if (entry.noteText && entry.noteText.trim().length > 0) {
-                map[poId] = 1;
-              }
-            }
-          });
-          setPoNotesMap(map);
+          return savedNotes ? JSON.parse(savedNotes) : {};
         } catch (e) {
-          console.error('Failed to parse notes count in POList:', e);
+          return {};
         }
-      }
+      })();
+
+      const map: Record<string, number> = {};
+      Object.keys(activeNotes).forEach(poId => {
+        const entry = activeNotes[poId];
+        if (entry) {
+          if (Array.isArray(entry.notesList)) {
+            const nonEmptyCount = entry.notesList.filter((n: any) => n.noteText && n.noteText.trim().length > 0).length;
+            if (nonEmptyCount > 0) {
+              map[poId] = nonEmptyCount;
+            }
+          } else if (entry.noteText && entry.noteText.trim().length > 0) {
+            map[poId] = 1;
+          }
+        }
+      });
+      setPoNotesMap(map);
     };
     handleLoadNotes();
-  }, [purchaseOrders]);
+  }, [purchaseOrders, notes]);
 
   // File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -727,12 +731,40 @@ export default function POList({
     if (!file) return;
 
     try {
-      const data = await file.arrayBuffer();
-      const workbook = XLSX.read(data, { type: 'array' });
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-      let finalRows = [...rows];
+      let finalRows: any[][] = [];
+      const extension = file.name.split('.').pop()?.toLowerCase();
+
+      try {
+        if (extension === 'xlsx') {
+          const workbook = new ExcelJS.Workbook();
+          const buffer = await file.arrayBuffer();
+          await workbook.xlsx.load(buffer);
+          const worksheet = workbook.worksheets[0];
+          worksheet.eachRow((row) => {
+            // ExcelJS index 0 is empty, so we slice
+            const rowValues = (row.values as any[]).slice(1);
+            finalRows.push(rowValues);
+          });
+        } else {
+          throw new Error('Fallback to XLSX');
+        }
+      } catch (exceljsErr: any) {
+        console.warn('ExcelJS parser bypassed/failed, falling back to SheetJS XLSX:', exceljsErr.message);
+        let workbook;
+        try {
+          const data = await file.arrayBuffer();
+          workbook = XLSX.read(data, { type: 'array' });
+        } catch (initialErr: any) {
+          console.warn('Standard arrayBuffer parse failed. Attempting text-based fallback.', initialErr.message);
+          // Fallback for ERP-generated Excel (often XML/HTML disguised as XLSX which fails ZIP inflation)
+          const textData = await file.text();
+          workbook = XLSX.read(textData, { type: 'string' });
+        }
+
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        finalRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      }
       
       // Detec and remove header row
       if (finalRows.length > 0) {
@@ -771,7 +803,7 @@ export default function POList({
       // but parent handleUpdateOrders already completely replaces the array.
       processDataLines(lines);
     } catch (err: any) {
-      console.error(err);
+      console.warn("Excel parsing final failure:", err.message);
       if (err.message && err.message.includes("Bad uncompressed size")) {
         alert(
           "文件解析失败: XLSX 文件内部压缩格式异常 (Bad uncompressed size)。\n\n" +

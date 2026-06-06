@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { PurchaseOrder } from '../types';
+import { PurchaseOrder, Comment, StickyNoteItem, StickyNote } from '../types';
 import { 
   Pin, 
   Paperclip, 
@@ -24,36 +24,14 @@ import {
   Plus
 } from 'lucide-react';
 
-interface Comment {
-  id: string;
-  author: string;
-  content: string;
-  time: string;
-}
-
-interface StickyNoteItem {
-  id: string;
-  noteText: string;
-  color: 'yellow' | 'blue' | 'pink' | 'green';
-  updatedAt: string;
-  customBg?: string;
-}
-
-interface StickyNote {
-  poId: string;
-  noteText?: string;
-  color?: 'yellow' | 'blue' | 'pink' | 'green';
-  updatedAt?: string;
-  notesList?: StickyNoteItem[];
-  comments: Comment[];
-}
-
 interface SkeuomorphicNotesProps {
   purchaseOrders: PurchaseOrder[];
   activePOId: string | null;
   onNavigateToPO: (poId: string) => void;
   autoAddNote?: string | null;
   onClearAutoAddNote?: () => void;
+  notes?: Record<string, StickyNote>;
+  onNotesChange?: (updated: Record<string, StickyNote>) => void;
 }
 
 export default function SkeuomorphicNotes({
@@ -61,9 +39,12 @@ export default function SkeuomorphicNotes({
   activePOId,
   onNavigateToPO,
   autoAddNote,
-  onClearAutoAddNote
+  onClearAutoAddNote,
+  notes: propsNotes,
+  onNotesChange
 }: SkeuomorphicNotesProps) {
-  const [notes, setNotes] = useState<Record<string, StickyNote>>({});
+  const [internalNotes, setInternalNotes] = useState<Record<string, StickyNote>>({});
+  const notes = propsNotes !== undefined ? propsNotes : internalNotes;
   const [selectedPOId, setSelectedPOId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'hasNotes' | 'starred'>('all');
@@ -78,22 +59,28 @@ export default function SkeuomorphicNotes({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load persistent note registry
+  // Load persistent note registry (only if props are not supplied)
   useEffect(() => {
-    const savedNotes = localStorage.getItem('order_sticky_notes');
-    if (savedNotes) {
-      try {
-        setNotes(JSON.parse(savedNotes));
-      } catch (e) {
-        console.error('Failed to load sticky notes:', e);
+    if (propsNotes === undefined) {
+      const savedNotes = localStorage.getItem('order_sticky_notes');
+      if (savedNotes) {
+        try {
+          setInternalNotes(JSON.parse(savedNotes));
+        } catch (e) {
+          console.error('Failed to load sticky notes:', e);
+        }
       }
     }
-  }, []);
+  }, [propsNotes]);
 
-  // Save changes to local storage
+  // Save changes
   const saveNotes = (updatedNotes: Record<string, StickyNote>) => {
-    setNotes(updatedNotes);
-    localStorage.setItem('order_sticky_notes', JSON.stringify(updatedNotes));
+    if (onNotesChange) {
+      onNotesChange(updatedNotes);
+    } else {
+      setInternalNotes(updatedNotes);
+      localStorage.setItem('order_sticky_notes', JSON.stringify(updatedNotes));
+    }
   };
 
   // Helper function to extract PO entry with seamless fallback and legend structures migration

@@ -89,3 +89,28 @@ export interface SupplierSummary {
   onTimeDeliveries: number;
   avgLeadTime: number; // Average days to deliver
 }
+
+export interface StickyNoteItem {
+  id: string;
+  noteText: string;
+  color: 'yellow' | 'blue' | 'pink' | 'green';
+  updatedAt: string;
+  customBg?: string;
+}
+
+export interface Comment {
+  id: string;
+  author: string;
+  content: string;
+  time: string;
+}
+
+export interface StickyNote {
+  poId: string;
+  noteText?: string;
+  color?: 'yellow' | 'blue' | 'pink' | 'green';
+  updatedAt?: string;
+  notesList?: StickyNoteItem[];
+  comments: Comment[];
+}
+
