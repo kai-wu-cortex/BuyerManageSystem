@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POStatus, PurchaseExecutionStatus } from './types';
-import { db, handleFirestoreError, OperationType } from './firebase';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { parseClipboardLine } from './utils/ledgerHelper';
@@ -11,16 +9,40 @@ import Dashboard from './components/Dashboard';
 import POList from './components/POList';
 import SampleTracker from './components/SampleTracker';
 import SkeuomorphicNotes from './components/SkeuomorphicNotes';
+import SystemLogin from './components/SystemLogin';
 import { useStarredPOs } from './lib/hooks';
+import {
+  clearCloudbaseCollections,
+  cloudbaseCollections,
+  formatLedgerBackupSize,
+  getCurrentCloudbaseUser,
+  getBuyerSystemAccess,
+  filterExpiredBackups,
+  getLatestLedgerBackup,
+  handleCloudbaseError,
+  isLedgerBackupNewerThanLoaded,
+  isCloudbaseConfigured,
+  listActiveLedgerBackups,
+  OperationType,
+  prepareSampleForCloudbaseSync,
+  pruneExpiredLedgerBackups,
+  replaceCollection,
+  replaceRecordCollection,
+  saveLedgerBackup,
+  sendCloudbaseOtp,
+  signInToCloudbase,
+  signOutFromCloudbase,
+  upsertDocuments,
+  watchCollection,
+  type CloudbaseAuthUser,
+  type CloudbaseOtpChallenge,
+  type CloudbaseOtpMethod,
+  type LedgerBackup,
+} from './lib/cloudbaseData';
 import { 
   BarChart3, 
   BookOpen, 
-  Warehouse, 
-  PlusCircle, 
-  RotateCw, 
-  Calendar,
   Layers,
-  ArrowRight,
   ShieldCheck,
   Menu,
   X,
@@ -31,38 +53,76 @@ import {
   Download,
   RefreshCw,
   FileJson,
-  Loader2
+  Loader2,
+  LogOut
 } from 'lucide-react';
 
-// Helper for chunked batch writes to avoid 500 operation limit
-const batchWriteDocs = async (
-  dbRef: any,
-  updates: { ref: any; data?: any; type: 'set' | 'delete' }[]
-) => {
-  const CHUNK_SIZE = 450;
-  for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
-    const batch = writeBatch(dbRef);
-    const chunk = updates.slice(i, i + CHUNK_SIZE);
-    for (const op of chunk) {
-      if (op.type === 'set') batch.set(op.ref, op.data);
-      if (op.type === 'delete') batch.delete(op.ref);
-    }
-    await batch.commit();
+type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes';
+type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
+
+const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'dashboard', label: '采购物料大屏', icon: <BarChart3 className="w-5 h-5 shrink-0" /> },
+  { id: 'ledger', label: '采购单台账', icon: <BookOpen className="w-5 h-5 shrink-0" /> },
+  { id: 'inventory', label: '样品获取与打样追踪', icon: <Layers className="w-5 h-5 shrink-0" /> },
+  { id: 'notes', label: '订单便签与流转', icon: <StickyNoteIcon className="w-5 h-5 shrink-0" /> },
+];
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
   }
-};
+
+  if (error !== null && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message;
+    }
+  }
+
+  return String(error);
+}
+
+const LEDGER_LOADED_BACKUP_TIME_KEY = 'purchase_orders_cloudbase_backup_time';
+
+function readStoredLedgerBackupTime(): number {
+  if (typeof window === 'undefined') {
+    return 0;
+  }
+
+  const value = window.localStorage.getItem(LEDGER_LOADED_BACKUP_TIME_KEY);
+  const rawTime = value ? Number(value) : 0;
+  return Number.isFinite(rawTime) && rawTime > 0 ? rawTime : 0;
+}
+
+function writeStoredLedgerBackupTime(rawTime: number): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (Number.isFinite(rawTime) && rawTime > 0) {
+    window.localStorage.setItem(LEDGER_LOADED_BACKUP_TIME_KEY, String(rawTime));
+  }
+}
 
 export default function App() {
   const { starredIds } = useStarredPOs();
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
+  const [authUser, setAuthUser] = useState<CloudbaseAuthUser | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [otpChallenge, setOtpChallenge] = useState<CloudbaseOtpChallenge | null>(null);
+  const userAccess = getBuyerSystemAccess(authUser);
   
   // Navigation tabs: 'dashboard' | 'ledger' | 'inventory' | 'notes'
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'ledger' | 'inventory' | 'notes'>('dashboard');
+  const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
   const [targetSearchTerm, setTargetSearchTerm] = useState('');
   const [autoAddNotePOId, setAutoAddNotePOId] = useState<string | null>(null);
   
   const mainScrollRef = useRef<HTMLElement>(null);
   const tabScrollPositions = useRef<Record<string, number>>({});
 
-  const handleTabChange = (newTab: 'dashboard' | 'ledger' | 'inventory' | 'notes') => {
+  const handleTabChange = (newTab: AppTab) => {
     if (mainScrollRef.current) {
       tabScrollPositions.current[activeTab] = mainScrollRef.current.scrollTop;
     }
@@ -84,7 +144,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarMinimized, setIsSidebarMinimized] = useState(false);
 
-  // Procurement Datasets with Firebase Synchronization
+  // Procurement Datasets with CloudBase synchronization
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [samples, setSamples] = useState<SampleRecord[]>([]);
@@ -101,33 +161,56 @@ export default function App() {
 
   // Historical ledger modal states
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-  const [historyBackups, setHistoryBackups] = useState<{
-    id: string;
-    name: string;
-    timeCreated: string;
-    rawTime: number;
-    size: number;
-    orders: PurchaseOrder[];
-  }[]>([]);
+  const [historyBackups, setHistoryBackups] = useState<LedgerBackup[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
+  const [loadedLedgerBackupRawTime, setLoadedLedgerBackupRawTime] = useState(readStoredLedgerBackupTime);
+  const [latestRemoteLedgerBackup, setLatestRemoteLedgerBackup] = useState<LedgerBackup | null>(null);
 
-  const cleanUndefined = <T extends any>(obj: T): T => {
-    if (obj === null || typeof obj !== 'object') return obj;
-    if (Array.isArray(obj)) {
-      return obj.map(cleanUndefined).filter(v => v !== undefined) as unknown as T;
+  const markLedgerBackupLoaded = (rawTime: number) => {
+    if (!Number.isFinite(rawTime) || rawTime <= 0) {
+      return;
     }
-    const result: Record<string, any> = {};
-    for (const [key, value] of Object.entries(obj)) {
-      if (value !== undefined) {
-        result[key] = cleanUndefined(value);
-      }
-    }
-    return result as T;
+
+    setLoadedLedgerBackupRawTime(rawTime);
+    writeStoredLedgerBackupTime(rawTime);
   };
 
-  // Initial load & Real-time Firebase Sync
   useEffect(() => {
+    let isMounted = true;
+
+    if (!isCloudbaseConfigured()) {
+      setAuthStatus('unauthenticated');
+      setAuthError('请先配置 VITE_CLOUDBASE_ENV_ID 和 VITE_CLOUDBASE_ACCESS_KEY。');
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    void getCurrentCloudbaseUser()
+      .then(user => {
+        if (!isMounted) return;
+        setAuthUser(user);
+        setAuthStatus(user ? 'authenticated' : 'unauthenticated');
+      })
+      .catch(error => {
+        if (!isMounted) return;
+        setAuthUser(null);
+        setAuthStatus('unauthenticated');
+        setAuthError(getErrorMessage(error));
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Initial load & real-time CloudBase sync
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || userAccess.mode !== 'full') {
+      return undefined;
+    }
+
     // 1. Sync Purchase Orders from localStorage
     const savedPO = localStorage.getItem("purchase_orders");
     if (savedPO) {
@@ -140,126 +223,6 @@ export default function App() {
       }
     }
 
-    // 2. Sync Inventory Stock
-    const unsubscribeInv = onSnapshot(collection(db, "inventory_stock"), async (snapshot) => {
-      if (snapshot.empty) {
-        const savedInv = localStorage.getItem("inventory_stock");
-        if (savedInv) {
-          try {
-            const parsed = JSON.parse(savedInv) as InventoryItem[];
-            const updates = [];
-            for (const item of parsed) {
-              updates.push({ ref: doc(db, "inventory_stock", item.code), data: cleanUndefined(item), type: 'set' as const });
-            }
-            await batchWriteDocs(db, updates);
-          } catch (e) {
-            console.error("Failed to seed inventory stock to Firebase:", e);
-          }
-        }
-      } else {
-        const liveInv: InventoryItem[] = [];
-        snapshot.forEach(doc => {
-          liveInv.push(doc.data() as InventoryItem);
-        });
-        setInventory(liveInv);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "inventory_stock");
-    });
-
-    // 3. Sync Sample Records
-    const unsubscribeSamples = onSnapshot(collection(db, "sample_records"), async (snapshot) => {
-      if (snapshot.empty) {
-        const savedSamples = localStorage.getItem("sample_records");
-        const parsedSamples = savedSamples ? JSON.parse(savedSamples) : [
-          {
-            id: "SMP-2026-0001",
-            name: "稀释剂改进样品",
-            spec: "102# 改性型",
-            category: "原材料",
-            supplier: "东莞市丰彩新材料有限公司",
-            requestDate: "2026-05-10",
-            status: "合格启用",
-            quantity: 2,
-            unit: "KG",
-            courierInfo: "顺丰速运: SF1428571428",
-            assignedTo: "李工",
-            notes: "粘度以及干燥速度符合打样标准，已经在3001批次试用。"
-          },
-          {
-            id: "SMP-2026-0002",
-            name: "高粘结粘合剂",
-            spec: "BHG-7501升级款",
-            category: "包装物",
-            supplier: "广东邦固化学科技有限公司",
-            requestDate: "2026-05-25",
-            status: "测试中",
-            quantity: 1,
-            unit: "KG",
-            courierInfo: "中通快递: ZT88992211",
-            assignedTo: "王工",
-            notes: "正在进行抗剥离强度测试，初步表现良好。"
-          }
-        ];
-        try {
-          const updates = [];
-          for (const s of parsedSamples) {
-            try {
-              const size = new Blob([JSON.stringify(s)]).size;
-              if (size > 900000) {
-                console.warn(`Sample ${s.id} is too large (${size} bytes). Obscuring images to fit inside limits.`);
-                delete s.imgUrl;
-                delete s.imgUrls;
-                s.notes = s.notes + "\n(⚠️由于图片体积超过云端容量限制，历史原图未同步上云，请重新上传压缩图片)";
-              }
-              updates.push({ ref: doc(db, "sample_records", s.id), data: cleanUndefined(s), type: 'set' as const });
-            } catch (err) {
-              console.error(`Failed to prepare individual sample ${s.id} to Firebase:`, err);
-            }
-          }
-          await batchWriteDocs(db, updates);
-        } catch (e) {
-          console.error("Failed to seed samples to Firebase:", e);
-        }
-      } else {
-        const liveSamples: SampleRecord[] = [];
-        snapshot.forEach(doc => {
-          liveSamples.push(doc.data() as SampleRecord);
-        });
-        setSamples(liveSamples);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "sample_records");
-    });
-
-    // 4. Sync Order Sticky Notes
-    const unsubscribeNotes = onSnapshot(collection(db, "order_sticky_notes"), async (snapshot) => {
-      if (snapshot.empty) {
-        const savedNotes = localStorage.getItem("order_sticky_notes");
-        if (savedNotes) {
-          try {
-            const parsed = JSON.parse(savedNotes) as Record<string, StickyNote>;
-            const updates = [];
-            for (const poId of Object.keys(parsed)) {
-              updates.push({ ref: doc(db, "order_sticky_notes", poId), data: cleanUndefined(parsed[poId]), type: 'set' as const });
-            }
-            await batchWriteDocs(db, updates);
-          } catch (e) {
-            console.error("Failed to seed sticky notes to Firebase:", e);
-          }
-        }
-      } else {
-        const liveNotes: Record<string, StickyNote> = {};
-        snapshot.forEach(doc => {
-          liveNotes[doc.id] = doc.data() as StickyNote;
-        });
-        setNotes(liveNotes);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "order_sticky_notes");
-    });
-
-    // Clock tracker
     const updateTime = () => {
       const now = new Date();
       setCurrentTime(now.toLocaleString('zh-CN', { hour12: false }) + ' (UTC)');
@@ -267,15 +230,151 @@ export default function App() {
     updateTime();
     const clockInterval = setInterval(updateTime, 1000);
 
+    if (!isCloudbaseConfigured()) {
+      return () => clearInterval(clockInterval);
+    }
+
+    // 2. Sync Inventory Stock
+    const unsubscribeInv = watchCollection<InventoryItem>(
+      cloudbaseCollections.inventory,
+      async records => {
+        if (records.length === 0) {
+          const savedInv = localStorage.getItem("inventory_stock");
+          if (savedInv) {
+            try {
+              const parsed = JSON.parse(savedInv) as InventoryItem[];
+              setInventory(parsed);
+              await upsertDocuments(cloudbaseCollections.inventory, parsed, item => item.code);
+            } catch (e) {
+              console.error("Failed to seed inventory stock to CloudBase:", e);
+            }
+          }
+        } else {
+          setInventory(records);
+        }
+      },
+      error => {
+        try {
+          handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.inventory);
+        } catch (handledError) {
+          console.error(handledError);
+        }
+      },
+    );
+
+    // 3. Sync Sample Records
+    const unsubscribeSamples = watchCollection<SampleRecord>(
+      cloudbaseCollections.samples,
+      async records => {
+        if (records.length === 0) {
+          const savedSamples = localStorage.getItem("sample_records");
+          const parsedSamples: SampleRecord[] = savedSamples ? JSON.parse(savedSamples) as SampleRecord[] : [
+            {
+              id: "SMP-2026-0001",
+              name: "稀释剂改进样品",
+              spec: "102# 改性型",
+              category: "原材料",
+              supplier: "东莞市丰彩新材料有限公司",
+              requestDate: "2026-05-10",
+              status: "合格启用",
+              quantity: 2,
+              unit: "KG",
+              courierInfo: "顺丰速运: SF1428571428",
+              assignedTo: "李工",
+              notes: "粘度以及干燥速度符合打样标准，已经在3001批次试用。"
+            },
+            {
+              id: "SMP-2026-0002",
+              name: "高粘结粘合剂",
+              spec: "BHG-7501升级款",
+              category: "包装物",
+              supplier: "广东邦固化学科技有限公司",
+              requestDate: "2026-05-25",
+              status: "测试中",
+              quantity: 1,
+              unit: "KG",
+              courierInfo: "中通快递: ZT88992211",
+              assignedTo: "王工",
+              notes: "正在进行抗剥离强度测试，初步表现良好。"
+            }
+          ];
+          try {
+            const preparedSamples = parsedSamples.map(prepareSampleForCloudbaseSync);
+            setSamples(preparedSamples);
+            await upsertDocuments(cloudbaseCollections.samples, preparedSamples, sample => sample.id);
+          } catch (e) {
+            console.error("Failed to seed samples to CloudBase:", e);
+          }
+        } else {
+          setSamples(records);
+        }
+      },
+      error => {
+        try {
+          handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.samples);
+        } catch (handledError) {
+          console.error(handledError);
+        }
+      },
+    );
+
+    // 4. Sync Order Sticky Notes
+    const unsubscribeNotes = watchCollection<StickyNote>(
+      cloudbaseCollections.notes,
+      async records => {
+        if (records.length === 0) {
+          const savedNotes = localStorage.getItem("order_sticky_notes");
+          if (savedNotes) {
+            try {
+              const parsed = JSON.parse(savedNotes) as Record<string, StickyNote>;
+              setNotes(parsed);
+              await replaceRecordCollection(cloudbaseCollections.notes, parsed, {});
+            } catch (e) {
+              console.error("Failed to seed sticky notes to CloudBase:", e);
+            }
+          }
+        } else {
+          const liveNotes: Record<string, StickyNote> = {};
+          records.forEach(record => {
+            liveNotes[record.poId] = record;
+          });
+          setNotes(liveNotes);
+        }
+      },
+      error => {
+        try {
+          handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.notes);
+        } catch (handledError) {
+          console.error(handledError);
+        }
+      },
+    );
+
+    const unsubscribeLedgerBackups = watchCollection<LedgerBackup>(
+      cloudbaseCollections.ledgerBackups,
+      records => {
+        const { activeBackups } = filterExpiredBackups(records);
+        setLatestRemoteLedgerBackup(getLatestLedgerBackup(activeBackups));
+      },
+      error => {
+        try {
+          handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.ledgerBackups);
+        } catch (handledError) {
+          console.error(handledError);
+        }
+      },
+    );
+
     return () => {
       unsubscribeInv();
       unsubscribeSamples();
       unsubscribeNotes();
+      unsubscribeLedgerBackups();
       clearInterval(clockInterval);
     };
-  }, []);
+  }, [authStatus, userAccess.mode]);
 
-  // Sync state values on changes directly to Firebase
+  // Sync state values on changes directly to CloudBase
   const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
     try {
       localStorage.setItem("purchase_orders", JSON.stringify(updatedOrders));
@@ -287,64 +386,41 @@ export default function App() {
 
   const handleUpdateInventory = async (updatedInventory: InventoryItem[]) => {
     try {
-      const updates = [];
-      for (const item of updatedInventory) {
-        updates.push({ ref: doc(db, "inventory_stock", item.code), data: cleanUndefined(item), type: 'set' as const });
+      setInventory(updatedInventory);
+      localStorage.setItem("inventory_stock", JSON.stringify(updatedInventory));
+      if (!isCloudbaseConfigured()) {
+        return;
       }
-      const updatedCodes = new Set(updatedInventory.map(i => i.code));
-      for (const item of inventory) {
-        if (!updatedCodes.has(item.code)) {
-          updates.push({ ref: doc(db, "inventory_stock", item.code), type: 'delete' as const });
-        }
-      }
-      await batchWriteDocs(db, updates);
+      await replaceCollection(cloudbaseCollections.inventory, updatedInventory, inventory, item => item.code);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, "inventory_stock");
+      handleCloudbaseError(error, OperationType.WRITE, cloudbaseCollections.inventory);
     }
   };
 
   const handleUpdateSamples = async (updatedSamples: SampleRecord[]) => {
     try {
-      const updates = [];
-      for (const s of updatedSamples) {
-        const size = new Blob([JSON.stringify(s)]).size;
-        if (size > 900000) {
-          console.warn(`Sample ${s.id} is too large (${size} bytes). Truncating images to sync.`);
-          delete s.imgUrl;
-          delete s.imgUrls;
-          if (!s.notes.includes("超出限制")) {
-            s.notes = s.notes + "\n(⚠️由于图片体积超过云端容量限制，历史原图未同步上云，请重新上传压缩图片)";
-          }
-        }
-        updates.push({ ref: doc(db, "sample_records", s.id), data: cleanUndefined(s), type: 'set' as const });
+      const preparedSamples = updatedSamples.map(prepareSampleForCloudbaseSync);
+      setSamples(preparedSamples);
+      localStorage.setItem("sample_records", JSON.stringify(preparedSamples));
+      if (!isCloudbaseConfigured()) {
+        return;
       }
-      const updatedIds = new Set(updatedSamples.map(x => x.id));
-      for (const s of samples) {
-        if (!updatedIds.has(s.id)) {
-          updates.push({ ref: doc(db, "sample_records", s.id), type: 'delete' as const });
-        }
-      }
-      await batchWriteDocs(db, updates);
+      await replaceCollection(cloudbaseCollections.samples, preparedSamples, samples, sample => sample.id);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, "sample_records");
+      handleCloudbaseError(error, OperationType.WRITE, cloudbaseCollections.samples);
     }
   };
 
   const handleUpdateNotes = async (updatedNotes: Record<string, StickyNote>) => {
     try {
-      const updates = [];
-      for (const poId of Object.keys(updatedNotes)) {
-        updates.push({ ref: doc(db, "order_sticky_notes", poId), data: cleanUndefined(updatedNotes[poId]), type: 'set' as const });
+      setNotes(updatedNotes);
+      localStorage.setItem("order_sticky_notes", JSON.stringify(updatedNotes));
+      if (!isCloudbaseConfigured()) {
+        return;
       }
-      const updatedIds = new Set(Object.keys(updatedNotes));
-      for (const poId of Object.keys(notes)) {
-        if (!updatedIds.has(poId)) {
-          updates.push({ ref: doc(db, "order_sticky_notes", poId), type: 'delete' as const });
-        }
-      }
-      await batchWriteDocs(db, updates);
+      await replaceRecordCollection(cloudbaseCollections.notes, updatedNotes, notes);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, "order_sticky_notes");
+      handleCloudbaseError(error, OperationType.WRITE, cloudbaseCollections.notes);
     }
   };
 
@@ -465,22 +541,17 @@ export default function App() {
       return;
     }
     
-    // Clean all collections from Firestore but leave purchase_orders alone
+    // Clean CloudBase collections but leave purchase_orders in local import history alone
     try {
-      const batchDelete = async (colPath: string) => {
-        const querySnapshot = await getDocs(collection(db, colPath));
-        const updates = [];
-        for (const d of querySnapshot.docs) {
-          updates.push({ ref: doc(db, colPath, d.id), type: 'delete' as const });
-        }
-        await batchWriteDocs(db, updates);
-      };
-      
-      await batchDelete("inventory_stock");
-      await batchDelete("sample_records");
-      await batchDelete("order_sticky_notes");
+      if (isCloudbaseConfigured()) {
+        await clearCloudbaseCollections([
+          cloudbaseCollections.inventory,
+          cloudbaseCollections.samples,
+          cloudbaseCollections.notes,
+        ]);
+      }
     } catch (error) {
-      console.error("Failed to clear Firebase collections:", error);
+      console.error("Failed to clear CloudBase collections:", error);
     }
 
     // Clean all data locally
@@ -499,57 +570,29 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
 
-  const backupToFirebase = async (orders: PurchaseOrder[]) => {
+  const backupToCloudbase = async (orders: PurchaseOrder[]) => {
+    if (!isCloudbaseConfigured()) {
+      console.warn("CloudBase backup skipped because VITE_CLOUDBASE_ENV_ID is not configured.");
+      return;
+    }
+
     try {
-      const now = new Date();
-      const readableTimeStr = now.toLocaleString('zh-CN', { hour12: false });
-      const rawTime = now.getTime();
-      const id = `ledger_backup_${rawTime}`;
-      const name = `ledger_backup_${now.toISOString().split('T')[0]}_${now.toTimeString().split(' ')[0].replace(/:/g, '-')}`;
-      
-      const sizeList = new Blob([JSON.stringify(orders)]).size;
-      
-      const backupData = {
-        id,
-        name,
-        timeCreated: readableTimeStr,
-        rawTime,
-        size: sizeList,
-        orders
-      };
-
+      const backup = await saveLedgerBackup(orders);
+      console.log(`Successfully backed up ledger to CloudBase: ${backup.id}`);
+      markLedgerBackupLoaded(backup.rawTime);
+      setLatestRemoteLedgerBackup(current => {
+        if (!current || backup.rawTime >= current.rawTime) {
+          return backup;
+        }
+        return current;
+      });
       try {
-        await setDoc(doc(db, "ledger_backups", id), cleanUndefined(backupData));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `ledger_backups/${id}`);
-      }
-      console.log(`Successfully backed up ledger to Firestore: ${id}`);
-
-      // Auto-delete backups that are older than 5 days in the background
-      try {
-        const querySnapshot = await getDocs(collection(db, "ledger_backups"));
-        const fiveDaysInMs = 5 * 24 * 60 * 60 * 1000;
-        const nowMs = Date.now();
-        querySnapshot.forEach(async (docSnap) => {
-          const data = docSnap.data();
-          if (data) {
-            const bRawTime = data.rawTime || 0;
-            const bId = data.id || docSnap.id;
-            if (bRawTime > 0 && (nowMs - bRawTime > fiveDaysInMs)) {
-              try {
-                await deleteDoc(doc(db, "ledger_backups", bId));
-                console.log(`Background cleanup: auto-deleted expired backup ${bId}`);
-              } catch (deleteErr) {
-                console.warn(`Failed to auto-delete expired backup ${bId}:`, deleteErr);
-              }
-            }
-          }
-        });
+        await pruneExpiredLedgerBackups();
       } catch (cleanupErr) {
         console.warn("Background ledger backup auto-cleanup failed:", cleanupErr);
       }
-    } catch (e: any) {
-      console.error("Failed to backup ledger to Firebase Firestore:", e);
+    } catch (error) {
+      console.error("Failed to backup ledger to CloudBase:", error);
     }
   };
 
@@ -563,25 +606,24 @@ export default function App() {
       let parsedOrders: PurchaseOrder[] = [];
 
       if (extension === 'xlsx') {
-        let finalRows: any[][] = [];
+        let finalRows: unknown[][] = [];
         try {
           const workbook = new ExcelJS.Workbook();
           const buffer = await file.arrayBuffer();
           await workbook.xlsx.load(buffer);
           const worksheet = workbook.worksheets[0];
           worksheet.eachRow((row) => {
-            // ExcelJS index 0 is empty, so we slice
-            const rowValues = (row.values as any[]).slice(1);
-            finalRows.push(rowValues);
+            const values = Array.isArray(row.values) ? row.values : [];
+            finalRows.push(values.slice(1));
           });
-        } catch (exceljsErr: any) {
-          console.warn('ExcelJS parser failed in App.tsx, falling back to SheetJS XLSX:', exceljsErr.message);
+        } catch (exceljsErr) {
+          console.warn('ExcelJS parser failed in App.tsx, falling back to SheetJS XLSX:', getErrorMessage(exceljsErr));
           let workbook;
           try {
             const data = await file.arrayBuffer();
             workbook = XLSX.read(data, { type: 'array' });
-          } catch (initialErr: any) {
-            console.warn('Standard arrayBuffer parse failed in App.tsx. Attempting text-based fallback.', initialErr.message);
+          } catch (initialErr) {
+            console.warn('Standard arrayBuffer parse failed in App.tsx. Attempting text-based fallback.', getErrorMessage(initialErr));
             // Fallback for ERP-generated Excel (often XML/HTML disguised as XLSX which fails ZIP inflation)
             const textData = await file.text();
             workbook = XLSX.read(textData, { type: 'string' });
@@ -589,7 +631,7 @@ export default function App() {
 
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
-          finalRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          finalRows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1 });
         }
 
         // Detect and remove header row
@@ -708,16 +750,19 @@ export default function App() {
       if (Array.isArray(parsedOrders) && parsedOrders.length > 0) {
         // Complete replacement of orders
         handleUpdateOrders(parsedOrders);
-        alert(`🎉 成功解析并加载本地台账，共配准了 ${parsedOrders.length} 笔订单！\n即将把当前新台账自动备份至云端 Firestore 数据库...`);
+        alert(`🎉 成功解析并加载本地台账，共配准了 ${parsedOrders.length} 笔订单！\n即将把当前新台账自动备份至云端 CloudBase 数据库...`);
         
-        // Save to Firebase Firestore as backup
-        await backupToFirebase(parsedOrders);
+        // Save to CloudBase as backup
+        await backupToCloudbase(parsedOrders);
+        if (userAccess.mode === 'ledgerUploadOnly') {
+          await loadHistoryBackups();
+        }
       } else {
         alert("未能在文件中解析出任何有效的订单账目。请检查列分录是否和标准 36 列采购合规台账兼容。");
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
-      alert("加载台账失败: " + e.message);
+      alert("加载台账失败: " + getErrorMessage(e));
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -728,62 +773,22 @@ export default function App() {
     setIsLoadingHistory(true);
     setHistoryLoadError(null);
     try {
-      let querySnapshot;
-      try {
-        querySnapshot = await getDocs(collection(db, "ledger_backups"));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, "ledger_backups");
-        throw err;
+      if (!isCloudbaseConfigured()) {
+        setHistoryBackups([]);
+        setHistoryLoadError("请先在 .env.local 配置 VITE_CLOUDBASE_ENV_ID 后再读取云端备份。");
+        return;
       }
-
-      const nowMs = Date.now();
-      const fiveDaysInMs = 5 * 24 * 60 * 60 * 1000;
-      const items: any[] = [];
-      const expiredDocIds: string[] = [];
-
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        if (data) {
-          const rawTime = data.rawTime || 0;
-          const id = data.id || docSnap.id;
-          
-          if (rawTime > 0 && (nowMs - rawTime > fiveDaysInMs)) {
-            expiredDocIds.push(id);
-          } else {
-            items.push({
-              id,
-              name: data.name || docSnap.id,
-              timeCreated: data.timeCreated || '未知时间',
-              rawTime,
-              size: data.size || 0,
-              orders: data.orders || []
-            });
-          }
-        }
-      });
-
-      // Automatically prune expired documents in the database
-      if (expiredDocIds.length > 0) {
-        console.log(`Auto-deleting ${expiredDocIds.length} expired backups that are older than 5 days...`);
-        for (const expId of expiredDocIds) {
-          try {
-            await deleteDoc(doc(db, "ledger_backups", expId));
-          } catch (deleteErr) {
-            console.warn(`Failed to delete expired backup ${expId}:`, deleteErr);
-          }
-        }
-      }
-
-      // Sort newest first
-      items.sort((a, b) => b.rawTime - a.rawTime);
-      setHistoryBackups(items);
-    } catch (err: any) {
-      console.error("Failed to list historical backups from Firebase Firestore:", err);
+      const backups = await listActiveLedgerBackups();
+      setHistoryBackups(backups);
+      setLatestRemoteLedgerBackup(getLatestLedgerBackup(backups));
+    } catch (err) {
+      console.error("Failed to list historical backups from CloudBase:", err);
       try {
-        const parsed = JSON.parse(err.message);
-        setHistoryLoadError(parsed.error || err.message);
+        const message = err instanceof Error ? err.message : String(err);
+        const parsed = JSON.parse(message) as { error?: string };
+        setHistoryLoadError(parsed.error || message);
       } catch {
-        setHistoryLoadError(err.message || String(err));
+        setHistoryLoadError(err instanceof Error ? err.message : String(err));
       }
     } finally {
       setIsLoadingHistory(false);
@@ -796,24 +801,277 @@ export default function App() {
       const parsedOrders = backup.orders;
       if (Array.isArray(parsedOrders)) {
         handleUpdateOrders(parsedOrders);
+        markLedgerBackupLoaded(backup.rawTime);
+        setLatestRemoteLedgerBackup(current => {
+          if (current && current.rawTime >= backup.rawTime) {
+            return current;
+          }
+          return backup;
+        });
         
         // Show success reminder via animated toast notice
         setSuccessToast(`🎉 成功载入历史台账 [${backup.timeCreated}]，共 ${parsedOrders.length} 笔订单！`);
         
         setIsHistoryModalOpen(false);
-        // We do NOT call backupToFirebase(parsedOrders) here to prevent creating duplicate/redundant backup entries in the cloud
+        // We do not call backupToCloudbase(parsedOrders) here to prevent duplicate backup entries in the cloud.
       } else {
         alert("台账备份文件格式不正确，期望是一个有效的采购单数组。");
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to load select ledger:", err);
-      alert(`无法载入选定的历史台账: ${err.message || String(err)}`);
+      alert(`无法载入选定的历史台账: ${getErrorMessage(err)}`);
     } finally {
       setIsUploading(false);
     }
   };
 
+  const handleSignIn = async (username: string, password: string) => {
+    setIsSigningIn(true);
+    setAuthError(null);
+    try {
+      const user = await signInToCloudbase(username, password);
+      setAuthUser(user);
+      setAuthStatus('authenticated');
+      setOtpChallenge(null);
+    } catch (error) {
+      setAuthUser(null);
+      setAuthStatus('unauthenticated');
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSendOtp = async (method: CloudbaseOtpMethod, target: string) => {
+    setIsSendingOtp(true);
+    setAuthError(null);
+    try {
+      const challenge = await sendCloudbaseOtp(method, target);
+      setOtpChallenge(challenge);
+    } catch (error) {
+      setOtpChallenge(null);
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  const handleVerifyOtp = async (code: string) => {
+    if (!otpChallenge) {
+      setAuthError('请先发送验证码。');
+      return;
+    }
+
+    setIsSigningIn(true);
+    setAuthError(null);
+    try {
+      const user = await otpChallenge.verify(code);
+      setAuthUser(user);
+      setAuthStatus('authenticated');
+      setOtpChallenge(null);
+    } catch (error) {
+      setAuthUser(null);
+      setAuthStatus('unauthenticated');
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOutFromCloudbase();
+    } catch (error) {
+      console.error('CloudBase sign out failed:', error);
+    } finally {
+      setAuthUser(null);
+      setAuthStatus('unauthenticated');
+      setOtpChallenge(null);
+      setPurchaseOrders([]);
+      setInventory([]);
+      setSamples([]);
+      setNotes({});
+    }
+  };
+
+  useEffect(() => {
+    if (authStatus === 'authenticated' && userAccess.mode === 'ledgerUploadOnly') {
+      void loadHistoryBackups();
+    }
+  }, [authStatus, userAccess.mode]);
+
   const applyingSamplesCount = samples.filter(s => s.status === '申请中').length;
+  const hasLedgerUpdate = isLedgerBackupNewerThanLoaded(latestRemoteLedgerBackup, loadedLedgerBackupRawTime);
+
+  if (authStatus === 'checking') {
+    return (
+      <div className="min-h-screen bg-[#0F172A] text-white flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-300" />
+          <p className="text-xs font-bold tracking-[0.2em] uppercase text-slate-400">CloudBase Auth Checking</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authStatus === 'unauthenticated') {
+    return (
+      <SystemLogin
+        isConfigured={isCloudbaseConfigured()}
+        isSigningIn={isSigningIn}
+        isSendingOtp={isSendingOtp}
+        otpMethod={otpChallenge?.method ?? null}
+        otpTarget={otpChallenge?.target ?? null}
+        error={authError}
+        onSignIn={handleSignIn}
+        onSendOtp={handleSendOtp}
+        onVerifyOtp={handleVerifyOtp}
+      />
+    );
+  }
+
+  if (userAccess.mode === 'ledgerUploadOnly') {
+    return (
+      <div className="min-h-screen bg-[#F1F5F9] text-slate-900 flex items-center justify-center p-6">
+        <div className="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+          <div className="px-6 py-5 border-b border-slate-100 bg-[#111827] text-white flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-blue-500/15 border border-blue-400/30 flex items-center justify-center">
+                <UploadCloud className="h-5 w-5 text-blue-300" />
+              </div>
+              <div>
+                <h1 className="text-lg font-black tracking-tight">财务台账上传</h1>
+                <p className="text-xs font-semibold text-slate-400 mt-0.5">CloudBase 用户: {authUser?.username ?? authUser?.uid}</p>
+              </div>
+            </div>
+            <button
+              onClick={handleSignOut}
+              className="h-8 w-8 rounded border border-white/10 bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 flex items-center justify-center transition"
+              title="退出登入"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="p-8 space-y-6">
+            <div>
+              <p className="text-sm font-bold text-slate-800">仅开放上传台账功能</p>
+              <p className="mt-2 text-xs leading-6 text-slate-500">
+                当前账号为财务权限，不显示采购大屏、采购单列表、样品追踪和订单便签模块。
+              </p>
+            </div>
+
+            <input
+              type="file"
+              accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+            />
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="w-full rounded-xl bg-blue-600 px-5 py-4 text-sm font-black text-white transition hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              <UploadCloud className="h-5 w-5" />
+              {isUploading ? '正在上传台账...' : '上传 XLSX / JSON 台账'}
+            </button>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 bg-white flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <Cloud className="w-5 h-5 text-blue-500 stroke-[2]" />
+                  <div>
+                    <h2 className="text-sm font-black text-slate-800">历史台账备份</h2>
+                    <p className="text-[10px] text-slate-400 font-semibold mt-0.5">读取 CloudBase ledger_backups 集合</p>
+                  </div>
+                </div>
+                <button
+                  onClick={loadHistoryBackups}
+                  disabled={isLoadingHistory}
+                  className="px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-200 text-[10.5px] font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLoadingHistory ? 'animate-spin' : ''}`} />
+                  刷新
+                </button>
+              </div>
+
+              <div className="p-5">
+                {historyLoadError && (
+                  <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-600">
+                    {historyLoadError}
+                  </div>
+                )}
+
+                {isLoadingHistory ? (
+                  <div className="py-10 flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
+                    <p className="text-xs text-slate-500 font-bold">正在拉取云端历史台账...</p>
+                  </div>
+                ) : historyBackups.length === 0 ? (
+                  <div className="py-10 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center gap-3 bg-white">
+                    <FileJson className="w-9 h-9 text-slate-300 stroke-[1.5]" />
+                    <div className="text-center space-y-1 px-4">
+                      <p className="text-xs font-bold text-slate-600">云端暂无备份文件</p>
+                      <p className="text-[10.5px] text-slate-400 leading-relaxed">上传台账后会自动保存至 CloudBase，可在这里查看历史记录。</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+                    {historyBackups.map(backup => (
+                      <div
+                        key={backup.id}
+                        className="p-3 border border-slate-150 rounded-xl bg-white hover:border-blue-300 transition-all flex items-center justify-between gap-3"
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <FileJson className="w-5 h-5 text-blue-500 stroke-[1.5] mt-0.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-700 font-mono leading-tight truncate">{backup.name}</p>
+                            <p className="text-[10px] text-slate-400 font-medium mt-1">
+                              备份时间: <strong className="text-slate-600">{backup.timeCreated}</strong>
+                            </p>
+                          </div>
+                        </div>
+                        <div className="shrink-0 flex flex-col items-end gap-1">
+                          <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">
+                            {formatLedgerBackupSize(backup.size)}
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-400">{backup.orders.length} 笔订单</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (userAccess.mode === 'none') {
+    return (
+      <div className="min-h-screen bg-[#0F172A] text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white text-slate-900 shadow-2xl p-8">
+          <div className="h-11 w-11 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center">
+            <ShieldCheck className="h-5 w-5 text-red-600" />
+          </div>
+          <h1 className="mt-5 text-xl font-black tracking-tight">当前账号未配置系统权限</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-500">
+            仅 `caigou` 可查看全部模块，`caiwu` 可上传台账。请切换到已授权账号。
+          </p>
+          <button
+            onClick={handleSignOut}
+            className="mt-6 w-full rounded-lg bg-slate-900 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
+          >
+            退出并重新登入
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F1F5F9] flex flex-col font-sans text-slate-900 selection:bg-blue-100">
@@ -893,18 +1151,13 @@ export default function App() {
           )}
           
           <nav className="p-4 pt-1 space-y-2 flex flex-col overflow-y-auto">
-            {[
-              { id: 'dashboard', label: '采购物料大屏', icon: <BarChart3 className="w-5 h-5 shrink-0" /> },
-              { id: 'ledger', label: '采购单台账', icon: <BookOpen className="w-5 h-5 shrink-0" /> },
-              { id: 'inventory', label: '样品获取与打样追踪', icon: <Layers className="w-5 h-5 shrink-0" /> },
-              { id: 'notes', label: '订单便签与流转', icon: <StickyNoteIcon className="w-5 h-5 shrink-0" /> }
-            ].map(tab => {
+            {navigationTabs.map(tab => {
               const isActive = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
                   onClick={() => {
-                    handleTabChange(tab.id as any);
+                    handleTabChange(tab.id);
                     setIsSidebarOpen(false);
                   }}
                   title={isSidebarMinimized ? tab.label : undefined}
@@ -965,37 +1218,65 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-6 self-end sm:self-auto">
-              <div className="flex items-center gap-2">
-                <input
-                  type="file"
-                  accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  className="hidden"
-                  ref={fileInputRef}
-                  onChange={handleFileUpload}
-                />
-                <button
-                  onClick={() => {
-                    setIsHistoryModalOpen(true);
-                    loadHistoryBackups();
-                  }}
-                  disabled={isUploading}
-                  className="px-3 py-1.5 border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-xs font-bold transition-all flex items-center gap-1.5 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="选择云端历史存储的台账文件并加载"
-                >
-                  <UploadCloud className="w-3.5 h-3.5" />
-                  {isUploading ? '正在加载...' : '加载台账'}
-                </button>
-                <button 
-                  onClick={handleClearAllData}
-                  className={`px-3 py-1.5 border rounded text-xs font-bold transition-all ${
-                    isConfirmingClear 
-                      ? 'bg-red-600 text-white border-red-600 hover:bg-red-700 shadow-md shadow-red-500/20' 
-                      : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
-                  }`}
-                  title="清除所有本地缓存数据，恢复初始状态"
-                >
-                  {isConfirmingClear ? '再次点击确认' : '清除缓存'}
-                </button>
+              <div className="flex flex-col items-end">
+                <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">CloudBase User</span>
+                <div className="flex items-center gap-2">
+                  <span className="max-w-36 truncate font-mono text-xs font-bold text-slate-700">
+                    {authUser?.username ?? authUser?.email ?? authUser?.uid ?? '已登入'}
+                  </span>
+                  <button
+                    onClick={handleSignOut}
+                    className="h-7 w-7 rounded border border-slate-200 bg-white text-slate-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50 flex items-center justify-center transition"
+                    title="退出登入"
+                  >
+                    <LogOut className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+              <div className="h-8 w-px bg-slate-200"></div>
+              <div className="flex flex-col items-end gap-1.5">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    className="hidden"
+                    ref={fileInputRef}
+                    onChange={handleFileUpload}
+                  />
+                  <button
+                    onClick={() => {
+                      setIsHistoryModalOpen(true);
+                      loadHistoryBackups();
+                    }}
+                    disabled={isUploading}
+                    className="relative px-3 py-1.5 border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-xs font-bold transition-all flex items-center gap-1.5 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={hasLedgerUpdate ? '台账有更新，点击选择云端最新台账' : '选择云端历史存储的台账文件并加载'}
+                  >
+                    {hasLedgerUpdate && (
+                      <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />
+                    )}
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    {isUploading ? '正在加载...' : '加载台账'}
+                  </button>
+                  <button 
+                    onClick={handleClearAllData}
+                    className={`px-3 py-1.5 border rounded text-xs font-bold transition-all ${
+                      isConfirmingClear 
+                        ? 'bg-red-600 text-white border-red-600 hover:bg-red-700 shadow-md shadow-red-500/20' 
+                        : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                    }`}
+                    title="清除所有本地缓存数据，恢复初始状态"
+                  >
+                    {isConfirmingClear ? '再次点击确认' : '清除缓存'}
+                  </button>
+                </div>
+                {hasLedgerUpdate && latestRemoteLedgerBackup && (
+                  <div className="max-w-[230px] rounded border border-red-100 bg-red-50 px-2 py-1 text-[10px] font-bold leading-none text-red-600 flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+                    <span className="shrink-0">台账有更新</span>
+                    <span className="font-mono font-semibold text-red-500 truncate">{latestRemoteLedgerBackup.timeCreated}</span>
+                  </div>
+                )}
               </div>
               <div className="flex flex-col items-end">
                 <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">缺料预警 / ALERTS</span>
@@ -1137,14 +1418,14 @@ export default function App() {
               {isLoadingHistory ? (
                 <div className="py-12 flex flex-col items-center justify-center gap-3">
                   <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
-                  <p className="text-xs text-slate-500 font-medium">正在拉取云端 Firestore 备份列表...</p>
+                  <p className="text-xs text-slate-500 font-medium">正在拉取云端 CloudBase 备份列表...</p>
                 </div>
               ) : historyBackups.length === 0 ? (
                 <div className="py-10 border border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center gap-3 bg-slate-25/50">
                   <FileJson className="w-10 h-10 text-slate-300 stroke-[1.5]" />
                   <div className="text-center space-y-1 px-4">
                     <p className="text-xs font-bold text-slate-600">云端暂无备份文件</p>
-                    <p className="text-[10.5px] text-slate-450 leading-relaxed">系统每次加载台账或者手动备份时，会自动备份至云端 Firestore 数据库中。</p>
+                    <p className="text-[10.5px] text-slate-450 leading-relaxed">系统每次加载台账或者手动备份时，会自动备份至云端 CloudBase 数据库中。</p>
                   </div>
                   <button
                     onClick={loadHistoryBackups}
@@ -1198,7 +1479,7 @@ export default function App() {
             {/* Footer containing local browse options */}
             <div className="p-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs w-full">
               <span className="text-[10px] text-slate-400 leading-relaxed text-center sm:text-left">
-                提示: 备份将会长期在 Firestore 的 <code>ledger_backups</code> 集合中安全留存。
+                提示: 备份将会长期在 CloudBase 的 <code>ledger_backups</code> 集合中安全留存。
               </span>
               <button
                 onClick={() => {

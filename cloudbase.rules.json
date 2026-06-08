@@ -1,0 +1,26 @@
+{
+  "inventory_stock": {
+    "read": true,
+    "create": true,
+    "update": true,
+    "delete": true
+  },
+  "sample_records": {
+    "read": true,
+    "create": true,
+    "update": true,
+    "delete": true
+  },
+  "order_sticky_notes": {
+    "read": true,
+    "create": true,
+    "update": true,
+    "delete": true
+  },
+  "ledger_backups": {
+    "read": true,
+    "create": true,
+    "update": true,
+    "delete": true
+  }
+}

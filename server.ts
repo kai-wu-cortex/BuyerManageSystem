@@ -7,7 +7,15 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT ?? 3000);
+
+type GeminiContentPart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 // Large limits to handle pasted base64 screenshot images
 app.use(express.json({ limit: "50mb" }));
@@ -44,7 +52,7 @@ app.post("/api/gemini/parse-sample", async (req, res) => {
   const { text, image, images } = req.body;
 
   try {
-    const contents: any[] = [];
+    const contents: GeminiContentPart[] = [];
     
     // Set up parsing context parts
     contents.push({
@@ -132,12 +140,13 @@ ${text || "[无贴入文字]"}
       data: resultObject
     });
 
-  } catch (error: any) {
-    console.warn("Gemini Parsing warning in server-side (likely overload or quota):", error.message);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    console.warn("Gemini Parsing warning in server-side (likely overload or quota):", message);
     return res.status(500).json({
       success: false,
       error: "AI_PROCESSING_ERROR",
-      message: error.message || "后端AI在提取信息时发生了异常错误"
+      message
     });
   }
 });
