@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import {
   cleanUndefined,
+  createBuyerSystemViewSettingsRecord,
   filterExpiredBackups,
   formatLedgerBackupSize,
   getBuyerSystemAccess,
+  getBuyerSystemViewSettingsDocumentId,
   getLatestLedgerBackup,
   isLedgerBackupNewerThanLoaded,
   normalizeCloudbaseDocumentId,
@@ -77,3 +79,21 @@ assert.deepEqual(getBuyerSystemAccess({ uid: '3', username: null, email: 'ops@ex
   mode: 'none',
   label: '未授权',
 });
+
+const viewSettingsUser = { uid: 'user/采购 001', username: 'caigou', email: null };
+assert.equal(getBuyerSystemViewSettingsDocumentId(viewSettingsUser), 'buyer_system_view_settings_user____001');
+assert.deepEqual(
+  createBuyerSystemViewSettingsRecord(
+    viewSettingsUser,
+    'dashboard',
+    { timelineCols: 3, visibleFields: { supplier: true } },
+    '2026-06-08T10:00:00.000Z',
+  ),
+  {
+    id: 'buyer_system_view_settings_user____001',
+    uid: 'user/采购 001',
+    username: 'caigou',
+    dashboard: { timelineCols: 3, visibleFields: { supplier: true } },
+    updatedAt: '2026-06-08T10:00:00.000Z',
+  },
+);

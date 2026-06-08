@@ -22,5 +22,11 @@
     "create": true,
     "update": true,
     "delete": true
+  },
+  "buyer_system_view_settings": {
+    "read": "auth.uid != null",
+    "create": "auth.uid != null",
+    "update": "auth.uid != null",
+    "delete": "auth.uid != null"
   }
 }

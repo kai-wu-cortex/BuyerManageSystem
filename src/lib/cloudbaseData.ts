@@ -60,6 +60,36 @@ export interface CloudbaseOtpChallenge {
   verify: (code: string) => Promise<CloudbaseAuthUser>;
 }
 
+export type DashboardViewSettings = {
+  timelineCols: 1 | 2 | 3 | 4;
+  visibleFields: Record<string, boolean>;
+  drawerCols: 1 | 2;
+  drawerFields: Record<string, boolean>;
+  ganttFields: Record<string, boolean>;
+  moduleOrder: string[];
+  moduleWidths: Record<string, number>;
+};
+
+export type LedgerViewSettings = {
+  rowHeight: 'compact' | 'medium' | 'relaxed';
+  sheetSortField: string;
+  sheetSortOrder: 'asc' | 'desc';
+  columnsList: { field: string; name: string }[];
+  hiddenFields: string[];
+  columnWidths: Record<string, number>;
+};
+
+export type BuyerSystemViewSettingsScope = 'dashboard' | 'ledger';
+
+export interface BuyerSystemViewSettingsRecord {
+  id: string;
+  uid: string;
+  username: string | null;
+  dashboard?: Partial<DashboardViewSettings>;
+  ledger?: Partial<LedgerViewSettings>;
+  updatedAt: string;
+}
+
 export interface LedgerBackup {
   id: string;
   name: string;
@@ -73,7 +103,8 @@ export type CollectionName =
   | 'inventory_stock'
   | 'sample_records'
   | 'order_sticky_notes'
-  | 'ledger_backups';
+  | 'ledger_backups'
+  | 'buyer_system_view_settings';
 
 const DEFAULT_REGION = 'ap-shanghai';
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
@@ -295,6 +326,25 @@ export function getBuyerSystemAccess(user: CloudbaseAuthUser | null): BuyerSyste
   };
 }
 
+export function getBuyerSystemViewSettingsDocumentId(user: CloudbaseAuthUser): string {
+  return normalizeCloudbaseDocumentId(`buyer_system_view_settings_${user.uid}`);
+}
+
+export function createBuyerSystemViewSettingsRecord(
+  user: CloudbaseAuthUser,
+  scope: BuyerSystemViewSettingsScope,
+  settings: Partial<DashboardViewSettings> | Partial<LedgerViewSettings>,
+  updatedAt = new Date().toISOString(),
+): BuyerSystemViewSettingsRecord {
+  return {
+    id: getBuyerSystemViewSettingsDocumentId(user),
+    uid: user.uid,
+    username: user.username,
+    [scope]: settings,
+    updatedAt,
+  };
+}
+
 export function validateCloudbaseLoginInput(username: string, password: string): string | null {
   if (!normalizeCloudbaseUsername(username)) {
     return '请输入用户名。';
@@ -472,6 +522,25 @@ export async function listDocuments<T>(collectionName: CollectionName): Promise<
   return result.data.filter(isCloudbaseRecord).map(record => stripCloudbaseSystemFields<T>(record));
 }
 
+export async function getDocument<T>(collectionName: CollectionName, documentId: string): Promise<T | null> {
+  await ensureCloudbaseAuth();
+  const id = normalizeCloudbaseDocumentId(documentId);
+  const result = await getCloudbaseDb().collection(collectionName).doc(id).get();
+  assertNoSdkError(result, `${collectionName}/${id}`);
+
+  const data = result.data;
+  if (Array.isArray(data)) {
+    const first = data.find(isCloudbaseRecord);
+    return first ? stripCloudbaseSystemFields<T>(first) : null;
+  }
+
+  if (isCloudbaseRecord(data)) {
+    return stripCloudbaseSystemFields<T>(data);
+  }
+
+  return null;
+}
+
 async function listDocumentIds(collectionName: CollectionName): Promise<string[]> {
   await ensureCloudbaseAuth();
   const result = await getCloudbaseDb().collection(collectionName).limit(1000).get();
@@ -542,6 +611,31 @@ export async function clearCloudbaseCollections(collectionNames: CollectionName[
     const ids = await listDocumentIds(collectionName);
     await runInChunks(ids, id => deleteDocument(collectionName, id));
   }
+}
+
+export async function loadBuyerSystemViewSettings(
+  user: CloudbaseAuthUser,
+): Promise<BuyerSystemViewSettingsRecord | null> {
+  return getDocument<BuyerSystemViewSettingsRecord>(
+    'buyer_system_view_settings',
+    getBuyerSystemViewSettingsDocumentId(user),
+  );
+}
+
+export async function saveBuyerSystemViewSettings(
+  user: CloudbaseAuthUser,
+  scope: BuyerSystemViewSettingsScope,
+  settings: Partial<DashboardViewSettings> | Partial<LedgerViewSettings>,
+): Promise<void> {
+  const existing = await loadBuyerSystemViewSettings(user);
+  const nextRecord: BuyerSystemViewSettingsRecord = {
+    ...existing,
+    ...createBuyerSystemViewSettingsRecord(user, scope, settings),
+    dashboard: scope === 'dashboard' ? settings as Partial<DashboardViewSettings> : existing?.dashboard,
+    ledger: scope === 'ledger' ? settings as Partial<LedgerViewSettings> : existing?.ledger,
+  };
+
+  await setDocument('buyer_system_view_settings', nextRecord.id, nextRecord);
 }
 
 export function prepareSampleForCloudbaseSync(sample: SampleRecord): SampleRecord {
@@ -645,4 +739,5 @@ export const cloudbaseCollections = {
   samples: 'sample_records',
   notes: 'order_sticky_notes',
   ledgerBackups: 'ledger_backups',
+  viewSettings: 'buyer_system_view_settings',
 } as const satisfies Record<string, CollectionName>;

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { PurchaseOrder, InventoryItem } from '../types';
 import { 
   TrendingUp, 
@@ -22,6 +22,12 @@ import {
 } from 'recharts';
 import { useStarredPOs } from '../lib/hooks';
 import { motion, AnimatePresence } from 'motion/react';
+import {
+  loadBuyerSystemViewSettings,
+  saveBuyerSystemViewSettings,
+  type CloudbaseAuthUser,
+  type DashboardViewSettings,
+} from '../lib/cloudbaseData';
 
 interface DashboardProps {
   purchaseOrders: PurchaseOrder[];
@@ -29,9 +35,98 @@ interface DashboardProps {
   onNavigateToPOS: (poId?: string) => void;
   onNavigateToMaterials: () => void;
   onGenerateQuickPO: (item: InventoryItem) => void;
+  authUser?: CloudbaseAuthUser | null;
 }
 
 const COLORS = ['#2563EB', '#F97316', '#10B981', '#6366F1', '#8B5CF6', '#EC4899'];
+const DEFAULT_VISIBLE_FIELDS: DashboardViewSettings['visibleFields'] = {
+  supplier: true,
+  dates: true,
+  materials: true,
+  progress: true
+};
+const DEFAULT_DRAWER_FIELDS: DashboardViewSettings['drawerFields'] = {
+  supplier: true,
+  status: true,
+  dates: true,
+  items: true,
+  amount: true,
+  progress: true
+};
+const DEFAULT_GANTT_FIELDS: DashboardViewSettings['ganttFields'] = {
+  supplier: true,
+  dates: true,
+  executionStatus: false,
+  amount: false,
+  itemSummary: false
+};
+const DEFAULT_MODULE_ORDER = [
+  'kpis',
+  'trend',
+  'supplier',
+  'category',
+  'gantt',
+  'warnings'
+];
+const DEFAULT_MODULE_WIDTHS: DashboardViewSettings['moduleWidths'] = {
+  kpis: 3,
+  trend: 2,
+  supplier: 1,
+  category: 1,
+  gantt: 2,
+  warnings: 3
+};
+
+function isDashboardCols(value: unknown): value is 1 | 2 | 3 | 4 {
+  return value === 1 || value === 2 || value === 3 || value === 4;
+}
+
+function isDrawerCols(value: unknown): value is 1 | 2 {
+  return value === 1 || value === 2;
+}
+
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === 'string');
+}
+
+function sanitizeBooleanFlags(value: unknown, fallback: Record<string, boolean>): Record<string, boolean> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return fallback;
+  }
+
+  const next = { ...fallback };
+  for (const [key, flag] of Object.entries(value)) {
+    if (typeof flag === 'boolean') {
+      next[key] = flag;
+    }
+  }
+  return next;
+}
+
+function sanitizeModuleWidths(value: unknown): Record<string, number> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return DEFAULT_MODULE_WIDTHS;
+  }
+
+  const next = { ...DEFAULT_MODULE_WIDTHS };
+  for (const [key, width] of Object.entries(value)) {
+    if (typeof width === 'number' && Number.isFinite(width)) {
+      next[key] = Math.max(1, Math.min(3, Math.round(width)));
+    }
+  }
+  return next;
+}
+
+function sanitizeModuleOrder(value: unknown): string[] {
+  if (!isStringList(value)) {
+    return DEFAULT_MODULE_ORDER;
+  }
+
+  const knownModules = new Set(DEFAULT_MODULE_ORDER);
+  const ordered = value.filter(moduleId => knownModules.has(moduleId));
+  const missing = DEFAULT_MODULE_ORDER.filter(moduleId => !ordered.includes(moduleId));
+  return [...ordered, ...missing];
+}
 
 const CustomYAxisTick = (props: any) => {
   const { x, y, payload } = props;
@@ -57,6 +152,7 @@ const CustomYAxisTick = (props: any) => {
 export default function Dashboard({ 
   purchaseOrders, 
   onNavigateToPOS, 
+  authUser = null,
 }: DashboardProps) {
   const [timelineCols, setTimelineCols] = useState<1 | 2 | 3 | 4>((() => {
     const saved = localStorage.getItem('dashboard_timeline_cols');
@@ -65,12 +161,7 @@ export default function Dashboard({
   const [showConfig, setShowConfig] = useState(false);
   const [visibleFields, setVisibleFields] = useState((() => {
     const saved = localStorage.getItem('dashboard_visible_fields');
-    return saved ? JSON.parse(saved) : {
-      supplier: true,
-      dates: true,
-      materials: true,
-      progress: true
-    };
+    return saved ? JSON.parse(saved) : DEFAULT_VISIBLE_FIELDS;
   })());
   
   const { starredIds } = useStarredPOs();
@@ -84,14 +175,7 @@ export default function Dashboard({
   })());
   const [drawerFields, setDrawerFields] = useState((() => {
     const saved = localStorage.getItem('dashboard_drawer_fields');
-    return saved ? JSON.parse(saved) : {
-      supplier: true,
-      status: true,
-      dates: true,
-      items: true,
-      amount: true,
-      progress: true
-    };
+    return saved ? JSON.parse(saved) : DEFAULT_DRAWER_FIELDS;
   })());
   const [showDrawerConfig, setShowDrawerConfig] = useState(false);
   
@@ -168,13 +252,7 @@ export default function Dashboard({
   const [showGanttConfig, setShowGanttConfig] = useState(false);
   const [ganttFields, setGanttFields] = useState((() => {
     const saved = localStorage.getItem('dashboard_gantt_fields');
-    return saved ? JSON.parse(saved) : {
-      supplier: true,
-      dates: true,
-      executionStatus: false,
-      amount: false,
-      itemSummary: false
-    };
+    return saved ? JSON.parse(saved) : DEFAULT_GANTT_FIELDS;
   })());
 
   useEffect(() => { localStorage.setItem('dashboard_gantt_fields', JSON.stringify(ganttFields)); }, [ganttFields]);
@@ -214,14 +292,7 @@ export default function Dashboard({
         if (Array.isArray(parsed) && parsed.length === 6) return parsed;
       } catch (e) {}
     }
-    return [
-      'kpis',
-      'trend',
-      'supplier',
-      'category',
-      'gantt',
-      'warnings'
-    ];
+    return DEFAULT_MODULE_ORDER;
   })());
 
   const [moduleWidths, setModuleWidths] = useState<Record<string, number>>((() => {
@@ -231,18 +302,78 @@ export default function Dashboard({
         return JSON.parse(saved);
       } catch (e) {}
     }
-    return {
-      'kpis': 3,
-      'trend': 2,
-      'supplier': 1,
-      'category': 1,
-      'gantt': 2,
-      'warnings': 3
-    };
+    return DEFAULT_MODULE_WIDTHS;
   })());
 
   useEffect(() => { localStorage.setItem('dashboard_module_order', JSON.stringify(moduleOrder)); }, [moduleOrder]);
   useEffect(() => { localStorage.setItem('dashboard_module_widths', JSON.stringify(moduleWidths)); }, [moduleWidths]);
+
+  const cloudSettingsLoadedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    cloudSettingsLoadedRef.current = false;
+
+    if (!authUser) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void loadBuyerSystemViewSettings(authUser)
+      .then(record => {
+        if (cancelled || !record?.dashboard) return;
+        const settings = record.dashboard;
+
+        if (isDashboardCols(settings.timelineCols)) {
+          setTimelineCols(settings.timelineCols);
+        }
+        if (isDrawerCols(settings.drawerCols)) {
+          setDrawerCols(settings.drawerCols);
+        }
+        setVisibleFields(sanitizeBooleanFlags(settings.visibleFields, DEFAULT_VISIBLE_FIELDS));
+        setDrawerFields(sanitizeBooleanFlags(settings.drawerFields, DEFAULT_DRAWER_FIELDS));
+        setGanttFields(sanitizeBooleanFlags(settings.ganttFields, DEFAULT_GANTT_FIELDS));
+        setModuleOrder(sanitizeModuleOrder(settings.moduleOrder));
+        setModuleWidths(sanitizeModuleWidths(settings.moduleWidths));
+      })
+      .catch(error => {
+        console.warn('Failed to load dashboard settings from CloudBase:', error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          cloudSettingsLoadedRef.current = true;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || !cloudSettingsLoadedRef.current) {
+      return;
+    }
+
+    const settings: DashboardViewSettings = {
+      timelineCols,
+      visibleFields,
+      drawerCols,
+      drawerFields,
+      ganttFields,
+      moduleOrder,
+      moduleWidths,
+    };
+
+    const timer = window.setTimeout(() => {
+      void saveBuyerSystemViewSettings(authUser, 'dashboard', settings).catch(error => {
+        console.warn('Failed to save dashboard settings to CloudBase:', error);
+      });
+    }, 600);
+
+    return () => window.clearTimeout(timer);
+  }, [authUser, timelineCols, visibleFields, drawerCols, drawerFields, ganttFields, moduleOrder, moduleWidths]);
 
   const adjustWidth = (id: string, delta: number) => {
     setModuleWidths(prev => {

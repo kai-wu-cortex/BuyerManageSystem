@@ -1300,6 +1300,7 @@ export default function App() {
               <POList 
                 purchaseOrders={purchaseOrders}
                 onReplaceOrders={handleUpdateOrders}
+                authUser={authUser}
                 onNavigateToNotes={(poId, autoAdd = false) => {
                   if (autoAdd) {
                     setAutoAddNotePOId(poId);
@@ -1317,6 +1318,7 @@ export default function App() {
                   <Dashboard 
                     purchaseOrders={purchaseOrders} 
                     inventory={inventory}
+                    authUser={authUser}
                     onNavigateToPOS={(poId?: string) => {
                       if (poId) setTargetSearchTerm(poId);
                       handleTabChange('ledger');
@@ -1330,6 +1332,7 @@ export default function App() {
                   <POList 
                     purchaseOrders={purchaseOrders}
                     onReplaceOrders={handleUpdateOrders}
+                    authUser={authUser}
                     targetSearchTerm={targetSearchTerm}
                     onClearTargetSearchTerm={() => setTargetSearchTerm('')}
                     onNavigateToNotes={(poId, autoAdd = false) => {

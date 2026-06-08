@@ -24,6 +24,7 @@ CloudBase collections used by the app:
 - `sample_records`
 - `order_sticky_notes`
 - `ledger_backups`
+- `buyer_system_view_settings`
 
 Before running against CloudBase, create these collections in CloudBase 文档型数据库, enable anonymous login if this app should keep its no-login behavior, and apply rules equivalent to [cloudbase.rules.json](cloudbase.rules.json).
 

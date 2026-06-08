@@ -24,6 +24,12 @@ import {
   Star
 } from 'lucide-react';
 import { useStarredPOs } from '../lib/hooks';
+import {
+  loadBuyerSystemViewSettings,
+  saveBuyerSystemViewSettings,
+  type CloudbaseAuthUser,
+  type LedgerViewSettings,
+} from '../lib/cloudbaseData';
 
 interface POListProps {
   purchaseOrders: PurchaseOrder[];
@@ -32,6 +38,75 @@ interface POListProps {
   onClearTargetSearchTerm?: () => void;
   onNavigateToNotes?: (poId: string, autoAdd?: boolean) => void;
   notes?: Record<string, any>;
+  authUser?: CloudbaseAuthUser | null;
+}
+
+type LedgerColumnConfig = { field: keyof FlatLedgerRow; name: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isRowHeight(value: unknown): value is LedgerViewSettings['rowHeight'] {
+  return value === 'compact' || value === 'medium' || value === 'relaxed';
+}
+
+function isSheetSortOrder(value: unknown): value is LedgerViewSettings['sheetSortOrder'] {
+  return value === 'asc' || value === 'desc';
+}
+
+function sanitizeLedgerColumnsList(
+  value: unknown,
+  defaultColumns: LedgerColumnConfig[],
+): LedgerColumnConfig[] {
+  const validFields = new Set(defaultColumns.map(column => column.field));
+  if (!Array.isArray(value)) {
+    return defaultColumns;
+  }
+
+  const filtered: LedgerColumnConfig[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.field !== 'string' || typeof item.name !== 'string') {
+      continue;
+    }
+
+    const field = item.field as keyof FlatLedgerRow;
+    if (validFields.has(field) && !filtered.some(column => column.field === field)) {
+      filtered.push({ field, name: item.name });
+    }
+  }
+
+  if (filtered.length === 0) {
+    return defaultColumns;
+  }
+
+  const missing = defaultColumns.filter(column => !filtered.some(item => item.field === column.field));
+  return [...filtered, ...missing];
+}
+
+function sanitizeHiddenFields(value: unknown, defaultColumns: LedgerColumnConfig[]): (keyof FlatLedgerRow)[] {
+  const validFields = new Set(defaultColumns.map(column => column.field));
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((field): field is keyof FlatLedgerRow => (
+    typeof field === 'string' && validFields.has(field as keyof FlatLedgerRow)
+  ));
+}
+
+function sanitizeColumnWidths(value: unknown, defaultWidths: Record<string, number>): Record<string, number> {
+  if (!isRecord(value)) {
+    return defaultWidths;
+  }
+
+  const next = { ...defaultWidths };
+  for (const [field, width] of Object.entries(value)) {
+    if (field in defaultWidths && typeof width === 'number' && Number.isFinite(width)) {
+      next[field] = Math.max(50, Math.round(width));
+    }
+  }
+  return next;
 }
 
 // Supplier typical material fallback
@@ -232,11 +307,12 @@ const renderCellContent = (
 
 export default function POList({ 
   purchaseOrders, 
-  onReplaceOrders, 
+  onReplaceOrders,
   targetSearchTerm, 
   onClearTargetSearchTerm,
   onNavigateToNotes,
-  notes
+  notes,
+  authUser = null
 }: POListProps) {
   const { starredIds, toggleStar } = useStarredPOs();
 
@@ -356,7 +432,7 @@ export default function POList({
   }, [sheetSortOrder]);
 
   // Standard Columns Definition List
-  const DEFAULT_COLUMNS: { field: keyof FlatLedgerRow; name: string }[] = [
+  const DEFAULT_COLUMNS: LedgerColumnConfig[] = [
     { field: 'id', name: '单据编号' }, 
     { field: 'date', name: '单据日期' }, 
     { field: 'supplier', name: '供应商' },
@@ -509,6 +585,74 @@ export default function POList({
   useEffect(() => {
     columnWidthsRef.current = columnWidths;
   }, [columnWidths]);
+
+  const cloudSettingsLoadedRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    cloudSettingsLoadedRef.current = false;
+
+    if (!authUser) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void loadBuyerSystemViewSettings(authUser)
+      .then(record => {
+        if (cancelled || !record?.ledger) return;
+        const settings = record.ledger;
+        const validFieldSet = new Set(DEFAULT_COLUMNS.map(column => column.field));
+
+        if (isRowHeight(settings.rowHeight)) {
+          setRowHeight(settings.rowHeight);
+        }
+        if (typeof settings.sheetSortField === 'string' && validFieldSet.has(settings.sheetSortField as keyof FlatLedgerRow)) {
+          setSheetSortField(settings.sheetSortField as keyof FlatLedgerRow);
+        }
+        if (isSheetSortOrder(settings.sheetSortOrder)) {
+          setSheetSortOrder(settings.sheetSortOrder);
+        }
+        setColumnsList(sanitizeLedgerColumnsList(settings.columnsList, DEFAULT_COLUMNS));
+        setHiddenFields(sanitizeHiddenFields(settings.hiddenFields, DEFAULT_COLUMNS));
+        setColumnWidths(sanitizeColumnWidths(settings.columnWidths, DEFAULT_COLUMN_WIDTHS));
+      })
+      .catch(error => {
+        console.warn('Failed to load ledger view settings from CloudBase:', error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          cloudSettingsLoadedRef.current = true;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || !cloudSettingsLoadedRef.current) {
+      return;
+    }
+
+    const settings: LedgerViewSettings = {
+      rowHeight,
+      sheetSortField,
+      sheetSortOrder,
+      columnsList: columnsList.map(column => ({ field: column.field, name: column.name })),
+      hiddenFields,
+      columnWidths,
+    };
+
+    const timer = window.setTimeout(() => {
+      void saveBuyerSystemViewSettings(authUser, 'ledger', settings).catch(error => {
+        console.warn('Failed to save ledger view settings to CloudBase:', error);
+      });
+    }, 600);
+
+    return () => window.clearTimeout(timer);
+  }, [authUser, rowHeight, sheetSortField, sheetSortOrder, columnsList, hiddenFields, columnWidths]);
 
   const CORE_FIELDS: (keyof FlatLedgerRow)[] = [
     'id', 'date', 'supplier', 'status', 'executionStatus', 'inboundStatus', 
