@@ -35,5 +35,10 @@ service cloud.firestore {
     match /order_sticky_notes/{poId} {
       allow read, write: if true;
     }
+
+    // 6. Ledger Backups Collection
+    match /ledger_backups/{backupId} {
+      allow read, write: if true;
+    }
   }
 }

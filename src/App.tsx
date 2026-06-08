@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote } from './types';
+import { motion, AnimatePresence } from 'motion/react';
+import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POStatus, PurchaseExecutionStatus } from './types';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
+import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { parseClipboardLine } from './utils/ledgerHelper';
+import { SUPPLIER_MATERIAL_MAPPING } from './components/POList';
 import Dashboard from './components/Dashboard';
 import POList from './components/POList';
 import SampleTracker from './components/SampleTracker';
@@ -20,7 +25,13 @@ import {
   Menu,
   X,
   ChevronDown,
-  StickyNote as StickyNoteIcon
+  StickyNote as StickyNoteIcon,
+  UploadCloud,
+  Cloud,
+  Download,
+  RefreshCw,
+  FileJson,
+  Loader2
 } from 'lucide-react';
 
 // Helper for chunked batch writes to avoid 500 operation limit
@@ -84,6 +95,22 @@ export default function App() {
   
   // Clear Data state
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
+
+  // Success toast message
+  const [successToast, setSuccessToast] = useState<string | null>(null);
+
+  // Historical ledger modal states
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyBackups, setHistoryBackups] = useState<{
+    id: string;
+    name: string;
+    timeCreated: string;
+    rawTime: number;
+    size: number;
+    orders: PurchaseOrder[];
+  }[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
 
   const cleanUndefined = <T extends any>(obj: T): T => {
     if (obj === null || typeof obj !== 'object') return obj;
@@ -469,10 +496,353 @@ export default function App() {
     window.location.reload();
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const backupToFirebase = async (orders: PurchaseOrder[]) => {
+    try {
+      const now = new Date();
+      const readableTimeStr = now.toLocaleString('zh-CN', { hour12: false });
+      const rawTime = now.getTime();
+      const id = `ledger_backup_${rawTime}`;
+      const name = `ledger_backup_${now.toISOString().split('T')[0]}_${now.toTimeString().split(' ')[0].replace(/:/g, '-')}`;
+      
+      const sizeList = new Blob([JSON.stringify(orders)]).size;
+      
+      const backupData = {
+        id,
+        name,
+        timeCreated: readableTimeStr,
+        rawTime,
+        size: sizeList,
+        orders
+      };
+
+      try {
+        await setDoc(doc(db, "ledger_backups", id), cleanUndefined(backupData));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `ledger_backups/${id}`);
+      }
+      console.log(`Successfully backed up ledger to Firestore: ${id}`);
+
+      // Auto-delete backups that are older than 5 days in the background
+      try {
+        const querySnapshot = await getDocs(collection(db, "ledger_backups"));
+        const fiveDaysInMs = 5 * 24 * 60 * 60 * 1000;
+        const nowMs = Date.now();
+        querySnapshot.forEach(async (docSnap) => {
+          const data = docSnap.data();
+          if (data) {
+            const bRawTime = data.rawTime || 0;
+            const bId = data.id || docSnap.id;
+            if (bRawTime > 0 && (nowMs - bRawTime > fiveDaysInMs)) {
+              try {
+                await deleteDoc(doc(db, "ledger_backups", bId));
+                console.log(`Background cleanup: auto-deleted expired backup ${bId}`);
+              } catch (deleteErr) {
+                console.warn(`Failed to auto-delete expired backup ${bId}:`, deleteErr);
+              }
+            }
+          }
+        });
+      } catch (cleanupErr) {
+        console.warn("Background ledger backup auto-cleanup failed:", cleanupErr);
+      }
+    } catch (e: any) {
+      console.error("Failed to backup ledger to Firebase Firestore:", e);
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    setIsUploading(true);
+    try {
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      let parsedOrders: PurchaseOrder[] = [];
+
+      if (extension === 'xlsx') {
+        let finalRows: any[][] = [];
+        try {
+          const workbook = new ExcelJS.Workbook();
+          const buffer = await file.arrayBuffer();
+          await workbook.xlsx.load(buffer);
+          const worksheet = workbook.worksheets[0];
+          worksheet.eachRow((row) => {
+            // ExcelJS index 0 is empty, so we slice
+            const rowValues = (row.values as any[]).slice(1);
+            finalRows.push(rowValues);
+          });
+        } catch (exceljsErr: any) {
+          console.warn('ExcelJS parser failed in App.tsx, falling back to SheetJS XLSX:', exceljsErr.message);
+          let workbook;
+          try {
+            const data = await file.arrayBuffer();
+            workbook = XLSX.read(data, { type: 'array' });
+          } catch (initialErr: any) {
+            console.warn('Standard arrayBuffer parse failed in App.tsx. Attempting text-based fallback.', initialErr.message);
+            // Fallback for ERP-generated Excel (often XML/HTML disguised as XLSX which fails ZIP inflation)
+            const textData = await file.text();
+            workbook = XLSX.read(textData, { type: 'string' });
+          }
+
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          finalRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        }
+
+        // Detect and remove header row
+        if (finalRows.length > 0) {
+          const firstRow = finalRows[0];
+          const headerKeywords = [
+            '编号', '单据', '日期', '供应商', '状态', '备注', '编码', '名称', '规格', '类别', 
+            '单位', '数量', '比例', '天数', '客户', '方式', '交货', 'ID', 'Date', 'Supplier', 
+            'Status', 'Qty', 'Price', 'Tax', 'Amount', 'Remark', 'Days', 'Rate', 'No', 'Code'
+          ];
+          
+          let matchCount = 0;
+          firstRow.forEach(cell => {
+            const text = String(cell || '').trim();
+            if (!text) return;
+            const isKeyword = headerKeywords.some(keyword => text.toLowerCase().includes(keyword.toLowerCase()));
+            if (isKeyword) {
+              matchCount++;
+            }
+          });
+
+          const firstCellText = String(firstRow[0] || '').trim().toLowerCase();
+          const firstIsHeader = ['单据', '单号', '编号', '序号', 'id', 'po', 'no', 'code', 'order'].some(k => firstCellText.includes(k));
+          
+          if (matchCount >= 3 || (firstRow.length >= 1 && firstIsHeader)) {
+            finalRows = finalRows.slice(1);
+          }
+        }
+
+        const lines = finalRows.map(row => row.map(cell => {
+          if (cell === null || cell === undefined) return '';
+          if (cell instanceof Date) return cell.toISOString().split('T')[0];
+          return cell.toString().replace(/\t|\n/g, ' ');
+        }).join('\t'));
+
+        // Process lines into purchase orders using the parsed ledger helpers
+        const poMap: Record<string, PurchaseOrder> = {};
+        lines.forEach((line) => {
+          const trimmed = line.trim();
+          if (trimmed === '') return;
+
+          if (trimmed.includes("单据编号") || trimmed.includes("单据日期") || trimmed.includes("商品编码") || trimmed.includes("商品名称")) {
+            return;
+          }
+
+          const parsed = parseClipboardLine(line);
+          if (!parsed) {
+            const cols = trimmed.split(/[,\t]|\s{2,}/);
+            if (cols.length >= 3) {
+              const id = cols[0]?.trim();
+              const rawDate = cols[1]?.trim();
+              const supplier = cols[2]?.trim();
+              const isDatePattern = /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(rawDate);
+              if (!id || !rawDate || !supplier || !isDatePattern) return;
+
+              const statusRaw = cols[3]?.trim() || "已审核";
+              const status: POStatus = statusRaw.includes("未") ? "未审核" : "已审核";
+              const execRaw = cols[4]?.trim() || "未执行";
+              let executionStatus: PurchaseExecutionStatus = "未执行";
+              if (execRaw.includes("全部")) executionStatus = "全部执行";
+              else if (execRaw.includes("部分")) executionStatus = "部分执行";
+
+              const typicalMat = SUPPLIER_MATERIAL_MAPPING[supplier] || {
+                code: "GENERIC-01", name: "常规系统自配辅料", spec: "标准", category: "辅料", unit: "PCS", price: 5.0
+              };
+
+              const expectedDelivery = new Date(rawDate);
+              expectedDelivery.setDate(expectedDelivery.getDate() + 5);
+
+              const fallbackItem: OrderItem = {
+                code: typicalMat.code || "GENERIC-01", name: typicalMat.name || "常规采购物料", spec: typicalMat.spec || "公制",
+                category: typicalMat.category || "原材料", unit: typicalMat.unit || "PCS", orderedQty: 1000, basicQty: 1000,
+                price: typicalMat.price || 1.0, taxRate: 13, taxAmount: Math.round(1000 * (typicalMat.price || 1.0) * 0.08),
+                receivedQty: executionStatus === '全部执行' ? 1000 : 0, remark: "导入补全",
+                inboundDate: executionStatus === '全部执行' ? rawDate : undefined
+              };
+
+              const fallbackPO: PurchaseOrder = {
+                id, date: rawDate, supplier, status, executionStatus,
+                inboundStatus: executionStatus === '全部执行' ? '全部入库' : executionStatus === '部分执行' ? '部分入库' : '未入库',
+                discountRate: 0, discountAmount: 0, transportMethod: "快递", settlementType: "月结",
+                deliveryDate: expectedDelivery.toISOString().split('T')[0], remarks: "自动导入",
+                items: [fallbackItem]
+              };
+
+              if (!poMap[id]) poMap[id] = fallbackPO;
+              else poMap[id].items.push(fallbackItem);
+            }
+            return;
+          }
+
+          const poId = parsed.po.id!;
+          if (!poMap[poId]) {
+            poMap[poId] = {
+              ...parsed.po,
+              executionStatus: parsed.po.executionStatus || "未执行",
+              inboundStatus: parsed.po.inboundStatus || "未入库",
+              items: [parsed.item as OrderItem]
+            } as PurchaseOrder;
+          } else {
+            poMap[poId].items.push(parsed.item as OrderItem);
+          }
+        });
+
+        parsedOrders = Object.values(poMap);
+      } else {
+        // Fallback or import from previous backup files (JSON)
+        const text = await file.text();
+        try {
+          parsedOrders = JSON.parse(text);
+        } catch (e) {
+          throw new Error("文件格式无法识别，请确保您上传的是标准的 36 列采购合规台账 (XLSX) 文件或备份 JSON 文件。");
+        }
+      }
+
+      if (Array.isArray(parsedOrders) && parsedOrders.length > 0) {
+        // Complete replacement of orders
+        handleUpdateOrders(parsedOrders);
+        alert(`🎉 成功解析并加载本地台账，共配准了 ${parsedOrders.length} 笔订单！\n即将把当前新台账自动备份至云端 Firestore 数据库...`);
+        
+        // Save to Firebase Firestore as backup
+        await backupToFirebase(parsedOrders);
+      } else {
+        alert("未能在文件中解析出任何有效的订单账目。请检查列分录是否和标准 36 列采购合规台账兼容。");
+      }
+    } catch (e: any) {
+      console.error(e);
+      alert("加载台账失败: " + e.message);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const loadHistoryBackups = async () => {
+    setIsLoadingHistory(true);
+    setHistoryLoadError(null);
+    try {
+      let querySnapshot;
+      try {
+        querySnapshot = await getDocs(collection(db, "ledger_backups"));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, "ledger_backups");
+        throw err;
+      }
+
+      const nowMs = Date.now();
+      const fiveDaysInMs = 5 * 24 * 60 * 60 * 1000;
+      const items: any[] = [];
+      const expiredDocIds: string[] = [];
+
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data) {
+          const rawTime = data.rawTime || 0;
+          const id = data.id || docSnap.id;
+          
+          if (rawTime > 0 && (nowMs - rawTime > fiveDaysInMs)) {
+            expiredDocIds.push(id);
+          } else {
+            items.push({
+              id,
+              name: data.name || docSnap.id,
+              timeCreated: data.timeCreated || '未知时间',
+              rawTime,
+              size: data.size || 0,
+              orders: data.orders || []
+            });
+          }
+        }
+      });
+
+      // Automatically prune expired documents in the database
+      if (expiredDocIds.length > 0) {
+        console.log(`Auto-deleting ${expiredDocIds.length} expired backups that are older than 5 days...`);
+        for (const expId of expiredDocIds) {
+          try {
+            await deleteDoc(doc(db, "ledger_backups", expId));
+          } catch (deleteErr) {
+            console.warn(`Failed to delete expired backup ${expId}:`, deleteErr);
+          }
+        }
+      }
+
+      // Sort newest first
+      items.sort((a, b) => b.rawTime - a.rawTime);
+      setHistoryBackups(items);
+    } catch (err: any) {
+      console.error("Failed to list historical backups from Firebase Firestore:", err);
+      try {
+        const parsed = JSON.parse(err.message);
+        setHistoryLoadError(parsed.error || err.message);
+      } catch {
+        setHistoryLoadError(err.message || String(err));
+      }
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const handleSelectHistoryBackup = async (backup: typeof historyBackups[0]) => {
+    setIsUploading(true);
+    try {
+      const parsedOrders = backup.orders;
+      if (Array.isArray(parsedOrders)) {
+        handleUpdateOrders(parsedOrders);
+        
+        // Show success reminder via animated toast notice
+        setSuccessToast(`🎉 成功载入历史台账 [${backup.timeCreated}]，共 ${parsedOrders.length} 笔订单！`);
+        
+        setIsHistoryModalOpen(false);
+        // We do NOT call backupToFirebase(parsedOrders) here to prevent creating duplicate/redundant backup entries in the cloud
+      } else {
+        alert("台账备份文件格式不正确，期望是一个有效的采购单数组。");
+      }
+    } catch (err: any) {
+      console.error("Failed to load select ledger:", err);
+      alert(`无法载入选定的历史台账: ${err.message || String(err)}`);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const applyingSamplesCount = samples.filter(s => s.status === '申请中').length;
 
   return (
     <div className="min-h-screen bg-[#F1F5F9] flex flex-col font-sans text-slate-900 selection:bg-blue-100">
+      
+      {/* Animated custom Toast feedback */}
+      <AnimatePresence>
+        {successToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, x: "-50%" }}
+            animate={{ opacity: 1, y: 0, x: "-50%" }}
+            exit={{ opacity: 0, y: -20, x: "-50%" }}
+            className="fixed top-6 left-1/2 z-[9999] bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border border-emerald-500/35 max-w-md w-full sm:w-auto"
+          >
+            <div className="flex items-center justify-center bg-white/20 p-2 rounded-xl shrink-0">
+              <ShieldCheck className="w-5 h-5 text-white" />
+            </div>
+            <div className="text-xs font-bold leading-relaxed flex-1">
+              {successToast}
+            </div>
+            <button
+              onClick={() => setSuccessToast(null)}
+              className="hover:bg-white/10 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="w-full max-w-[1600px] mx-auto min-h-screen lg:h-screen lg:overflow-hidden flex flex-col lg:flex-row bg-[#F1F5F9]">
         
         {/* Mobile Sidebar Overlay */}
@@ -498,9 +868,9 @@ export default function App() {
               </div>
               {!isSidebarMinimized && (
                 <>
-                  <p className="text-[10px] text-slate-400 font-semibold italic whitespace-nowrap">Ignite Your Ideas</p>
+                  <p className="text-[10px] text-slate-400 font-semibold italic whitespace-nowrap">点燃你的创意</p>
                   <div className="text-[10px] text-slate-400 mt-1 uppercase font-semibold whitespace-nowrap">
-                    ProcureTrack PRO v4.2
+                    采购追踪专业版 v4.2
                   </div>
                 </>
               )}
@@ -518,7 +888,7 @@ export default function App() {
           {/* Navigation Items */}
           {!isSidebarMinimized && (
             <div className="px-4 py-3 text-slate-500 font-mono text-[10px] tracking-wider uppercase font-bold whitespace-nowrap overflow-hidden">
-              导航菜单 / SYSTEM CONTROL
+              导航菜单
             </div>
           )}
           
@@ -563,27 +933,6 @@ export default function App() {
               );
             })}
           </nav>
-
-          {/* Diagnostics Section */}
-          {!isSidebarMinimized && (
-            <div className="mt-auto p-4 border-t border-slate-800 bg-[#0b1120] text-[11px] leading-relaxed overflow-hidden lg:rounded-b-2xl">
-              <div className="text-slate-400 font-medium text-xs mb-1.5 uppercase font-mono tracking-wider whitespace-nowrap">SYSTEM DIAGNOSTICS:</div>
-              <div className="bg-[#0F172A] p-2.5 rounded border border-slate-800 font-mono text-[10px] space-y-1.5 text-slate-300">
-                <div className="flex items-center justify-between gap-4">
-                  <span>VAULT_SYNC:</span>
-                  <span className="text-emerald-400 font-bold">LIVE</span>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <span>MEM_STORAGE:</span>
-                  <span className="text-emerald-400 font-bold">SECURE</span>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <span>THRESHOLD_ROP:</span>
-                  <span className="text-emerald-400 font-bold">ACTIVE</span>
-                </div>
-              </div>
-            </div>
-          )}
         </aside>
 
         {/* Right workspace core */}
@@ -616,17 +965,38 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-6 self-end sm:self-auto">
-              <button 
-                onClick={handleClearAllData}
-                className={`px-3 py-1.5 border rounded text-xs font-bold transition-all ${
-                  isConfirmingClear 
-                    ? 'bg-red-600 text-white border-red-600 hover:bg-red-700 shadow-md shadow-red-500/20' 
-                    : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
-                }`}
-                title="清除所有本地缓存数据，恢复初始状态"
-              >
-                {isConfirmingClear ? '再次点击确认清除' : '清除所有缓存'}
-              </button>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="hidden"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                />
+                <button
+                  onClick={() => {
+                    setIsHistoryModalOpen(true);
+                    loadHistoryBackups();
+                  }}
+                  disabled={isUploading}
+                  className="px-3 py-1.5 border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-xs font-bold transition-all flex items-center gap-1.5 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="选择云端历史存储的台账文件并加载"
+                >
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  {isUploading ? '正在加载...' : '加载台账'}
+                </button>
+                <button 
+                  onClick={handleClearAllData}
+                  className={`px-3 py-1.5 border rounded text-xs font-bold transition-all ${
+                    isConfirmingClear 
+                      ? 'bg-red-600 text-white border-red-600 hover:bg-red-700 shadow-md shadow-red-500/20' 
+                      : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                  }`}
+                  title="清除所有本地缓存数据，恢复初始状态"
+                >
+                  {isConfirmingClear ? '再次点击确认' : '清除缓存'}
+                </button>
+              </div>
               <div className="flex flex-col items-end">
                 <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">缺料预警 / ALERTS</span>
                 <span className={`font-mono text-sm md:text-base font-bold ${inventory.filter(item => item.currentStock < item.safetyStock).length > 0 ? 'text-[#EF4444] animate-pulse font-extrabold' : 'text-[#22C55E]'}`}>
@@ -728,6 +1098,123 @@ export default function App() {
         </div>
 
       </div>
+
+      {/* Historical Ledgers Popup Modal Dialog */}
+      {isHistoryModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 transition-all animation-fade-in animate-duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-100 flex flex-col max-h-[85vh]">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-150 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2.5">
+                <Cloud className="w-5 h-5 text-blue-500 stroke-[2]" />
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">选择云端历史台账</h3>
+                  <p className="text-[10px] text-slate-400 font-medium mt-0.5">从已保存的历史备份中恢复或导入新台账</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsHistoryModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1.5 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Main Area */}
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {/* Optional Error Alert */}
+              {historyLoadError && (
+                <div className="p-3.5 bg-red-50 border border-red-100 text-red-600 rounded-xl text-xs flex items-start gap-2.5">
+                  <div className="bg-red-100 p-1 rounded-md text-red-700 shrink-0 mt-0.5">⚠️</div>
+                  <div className="space-y-1">
+                    <p className="font-semibold">获取云端列表失败</p>
+                    <p className="font-mono text-[10px] leading-relaxed break-all text-red-500">{historyLoadError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Status / List View */}
+              {isLoadingHistory ? (
+                <div className="py-12 flex flex-col items-center justify-center gap-3">
+                  <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+                  <p className="text-xs text-slate-500 font-medium">正在拉取云端 Firestore 备份列表...</p>
+                </div>
+              ) : historyBackups.length === 0 ? (
+                <div className="py-10 border border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center gap-3 bg-slate-25/50">
+                  <FileJson className="w-10 h-10 text-slate-300 stroke-[1.5]" />
+                  <div className="text-center space-y-1 px-4">
+                    <p className="text-xs font-bold text-slate-600">云端暂无备份文件</p>
+                    <p className="text-[10.5px] text-slate-450 leading-relaxed">系统每次加载台账或者手动备份时，会自动备份至云端 Firestore 数据库中。</p>
+                  </div>
+                  <button
+                    onClick={loadHistoryBackups}
+                    className="mt-2.5 px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-200 text-[10.5px] font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    刷新列表
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 font-mono tracking-wider">
+                    <span>备份时间 & 名称 ({historyBackups.length})</span>
+                    <button
+                      onClick={loadHistoryBackups}
+                      className="text-blue-500 hover:text-blue-600 flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      刷新
+                    </button>
+                  </div>
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                    {historyBackups.map((backup, idx) => (
+                      <div 
+                        key={idx}
+                        className="p-3 border border-slate-150 hover:border-blue-300 rounded-xl hover:bg-blue-25/30 transition-all flex items-center justify-between gap-3 group"
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <FileJson className="w-5 h-5 text-blue-500 stroke-[1.5] mt-0.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-700 font-mono leading-tight truncate group-hover:text-blue-600">{backup.name}</p>
+                            <p className="text-[10px] text-slate-400 font-medium mt-1">
+                              备份时间: <strong className="text-slate-600">{backup.timeCreated}</strong> • 大小: <span className="font-mono text-[9px] bg-slate-100 px-1 py-0.5 rounded text-slate-600">{backup.size ? `${(backup.size / 1024).toFixed(1)} KB` : '未知'}</span>
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleSelectHistoryBackup(backup)}
+                          className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10.5px] font-bold shadow-xs transition-transform transform active:scale-95 flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <Download className="w-3 h-3" />
+                          载入台账
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer containing local browse options */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs w-full">
+              <span className="text-[10px] text-slate-400 leading-relaxed text-center sm:text-left">
+                提示: 备份将会长期在 Firestore 的 <code>ledger_backups</code> 集合中安全留存。
+              </span>
+              <button
+                onClick={() => {
+                  fileInputRef.current?.click();
+                  setIsHistoryModalOpen(false);
+                }}
+                className="w-full sm:w-auto px-3 py-1.5 border border-slate-200 text-slate-650 hover:bg-white hover:border-slate-350 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition-colors cursor-pointer shrink-0"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                本地 XLSX / JSON 导入
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

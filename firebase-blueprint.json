@@ -134,6 +134,20 @@
         "comments": { "type": "array" }
       },
       "required": ["poId", "comments"]
+    },
+    "LedgerBackup": {
+      "title": "LedgerBackup",
+      "description": "Historical backup of procurement ledger",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "timeCreated": { "type": "string" },
+        "rawTime": { "type": "number" },
+        "size": { "type": "number" },
+        "orders": { "type": "array" }
+      },
+      "required": ["id", "name", "timeCreated", "rawTime", "size", "orders"]
     }
   },
   "firestore": {
@@ -152,6 +166,10 @@
     "order_sticky_notes/{poId}": {
       "schema": { "$ref": "#/entities/StickyNote" },
       "description": "Stores skeuomorphic sticky notes and discussion logs"
+    },
+    "ledger_backups/{backupId}": {
+      "schema": { "$ref": "#/entities/LedgerBackup" },
+      "description": "Stores historical backups of the ledger"
     }
   }
 }
