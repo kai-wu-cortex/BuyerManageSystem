@@ -109,18 +109,24 @@ export type CollectionName =
 const DEFAULT_REGION = 'ap-shanghai';
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
 const LEDGER_BACKUP_TTL_MS = 5 * 24 * 60 * 60 * 1000;
+const viteCloudbaseEnv: ViteCloudbaseEnv = {
+  VITE_CLOUDBASE_ENV_ID:
+    typeof import.meta.env === 'undefined' ? undefined : import.meta.env.VITE_CLOUDBASE_ENV_ID,
+  VITE_CLOUDBASE_REGION:
+    typeof import.meta.env === 'undefined' ? undefined : import.meta.env.VITE_CLOUDBASE_REGION,
+  VITE_CLOUDBASE_ACCESS_KEY:
+    typeof import.meta.env === 'undefined' ? undefined : import.meta.env.VITE_CLOUDBASE_ACCESS_KEY,
+  VITE_CLOUDBASE_DATABASE:
+    typeof import.meta.env === 'undefined' ? undefined : import.meta.env.VITE_CLOUDBASE_DATABASE,
+};
 
 let cloudbaseApp: CloudbaseApp | null = null;
 let cloudbaseDb: CloudbaseDatabase | null = null;
 let cloudbaseAuth: CloudbaseAuth | null = null;
 let cloudbaseAuthPromise: Promise<void> | null = null;
 
-function getViteEnv(): ViteCloudbaseEnv {
-  return ((import.meta as ImportMeta & { env?: ViteCloudbaseEnv }).env ?? {});
-}
-
 function requiredCloudbaseEnvId(): string {
-  const envId = getViteEnv().VITE_CLOUDBASE_ENV_ID?.trim();
+  const envId = getOptionalEnvValue('VITE_CLOUDBASE_ENV_ID');
   if (!envId) {
     throw new Error('缺少 VITE_CLOUDBASE_ENV_ID，请在 .env.local 中配置 CloudBase 环境 ID。');
   }
@@ -128,7 +134,7 @@ function requiredCloudbaseEnvId(): string {
 }
 
 function getOptionalEnvValue(key: keyof ViteCloudbaseEnv): string | undefined {
-  const value = getViteEnv()[key]?.trim();
+  const value = viteCloudbaseEnv[key]?.trim();
   return value || undefined;
 }
 
