@@ -410,41 +410,33 @@ export async function signInToCloudbase(username: string, password: string): Pro
 
   const normalizedUser = normalizeCloudbaseUsername(username);
 
-  // Query the system_users collection for this username
-  const result = await getCloudbaseDb().collection('system_users')
-    .where({ username: normalizedUser })
-    .limit(1)
-    .get();
+  // 通过云函数代理登录，避免 CORS 问题
+  const envId = requiredCloudbaseEnvId();
+  const loginUrl = `https://${envId}.service.tcloudbase.com/login`;
 
-  if (typeof result.code === 'string') {
-    throw new Error(`数据库查询失败: ${result.message ?? result.code}`);
+  let response: Response;
+  try {
+    response = await fetch(loginUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: normalizedUser, password }),
+    });
+  } catch {
+    throw new Error('无法连接到登录服务，请检查网络连接或联系管理员。');
   }
 
-  const records = result.data ?? [];
-  if (!Array.isArray(records) || records.length === 0) {
-    throw new Error('用户名或密码错误。');
+  const result = await response.json() as { code: string; message?: string; data?: { uid: string; username: string; role: string } };
+
+  if (result.code !== 'SUCCESS' || !result.data) {
+    throw new Error(result.message || '登录失败，请检查用户名和密码。');
   }
 
-  const userDoc = records[0] as CloudbaseRecord;
-  const userHash = userDoc.passwordHash as string | undefined;
-  const userSalt = userDoc.salt as string | undefined;
-  const userRole = userDoc.role as string | undefined;
-
-  if (!userHash || !userSalt) {
-    throw new Error('用户数据异常，请联系管理员。');
-  }
-
-  // Verify password
-  const isValid = await verifyPassword(password, userSalt, userHash);
-  if (!isValid) {
-    throw new Error('用户名或密码错误。');
-  }
-
-  const role = (userRole === 'caigou' || userRole === 'caiwu') ? userRole as 'caigou' | 'caiwu' : null;
+  const { uid, username: userName, role: rawRole } = result.data;
+  const role = (rawRole === 'caigou' || rawRole === 'caiwu') ? rawRole as 'caigou' | 'caiwu' : null;
 
   const sessionUser: CloudbaseAuthUser = {
-    uid: normalizedUser,
-    username: normalizedUser,
+    uid,
+    username: userName,
     role,
   };
 
