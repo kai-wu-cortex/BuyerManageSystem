@@ -23,6 +23,7 @@ import {
   isLedgerBackupNewerThanLoaded,
   isCloudbaseConfigured,
   listActiveLedgerBackups,
+  listDocuments,
   OperationType,
   prepareSampleForCloudbaseSync,
   pruneExpiredLedgerBackups,
@@ -33,7 +34,6 @@ import {
   signInToCloudbase,
   signOutFromCloudbase,
   upsertDocuments,
-  watchCollection,
   type CloudbaseAuthUser,
   type CloudbaseOtpChallenge,
   type CloudbaseOtpMethod,
@@ -234,38 +234,29 @@ export default function App() {
       return () => clearInterval(clockInterval);
     }
 
-    // 2. Sync Inventory Stock
-    const unsubscribeInv = watchCollection<InventoryItem>(
-      cloudbaseCollections.inventory,
-      async records => {
+    void listDocuments<InventoryItem>(cloudbaseCollections.inventory)
+      .then(async records => {
         if (records.length === 0) {
           const savedInv = localStorage.getItem("inventory_stock");
-          if (savedInv) {
-            try {
-              const parsed = JSON.parse(savedInv) as InventoryItem[];
-              setInventory(parsed);
-              await upsertDocuments(cloudbaseCollections.inventory, parsed, item => item.code);
-            } catch (e) {
-              console.error("Failed to seed inventory stock to CloudBase:", e);
-            }
-          }
-        } else {
-          setInventory(records);
+          if (!savedInv) return;
+          const parsed = JSON.parse(savedInv) as InventoryItem[];
+          setInventory(parsed);
+          await upsertDocuments(cloudbaseCollections.inventory, parsed, item => item.code);
+          return;
         }
-      },
-      error => {
+
+        setInventory(records);
+      })
+      .catch(error => {
         try {
           handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.inventory);
         } catch (handledError) {
           console.error(handledError);
         }
-      },
-    );
+      });
 
-    // 3. Sync Sample Records
-    const unsubscribeSamples = watchCollection<SampleRecord>(
-      cloudbaseCollections.samples,
-      async records => {
+    void listDocuments<SampleRecord>(cloudbaseCollections.samples)
+      .then(async records => {
         if (records.length === 0) {
           const savedSamples = localStorage.getItem("sample_records");
           const parsedSamples: SampleRecord[] = savedSamples ? JSON.parse(savedSamples) as SampleRecord[] : [
@@ -298,78 +289,61 @@ export default function App() {
               notes: "正在进行抗剥离强度测试，初步表现良好。"
             }
           ];
-          try {
-            const preparedSamples = parsedSamples.map(prepareSampleForCloudbaseSync);
-            setSamples(preparedSamples);
-            await upsertDocuments(cloudbaseCollections.samples, preparedSamples, sample => sample.id);
-          } catch (e) {
-            console.error("Failed to seed samples to CloudBase:", e);
-          }
-        } else {
-          setSamples(records);
+          const preparedSamples = parsedSamples.map(prepareSampleForCloudbaseSync);
+          setSamples(preparedSamples);
+          await upsertDocuments(cloudbaseCollections.samples, preparedSamples, sample => sample.id);
+          return;
         }
-      },
-      error => {
+
+        setSamples(records);
+      })
+      .catch(error => {
         try {
           handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.samples);
         } catch (handledError) {
           console.error(handledError);
         }
-      },
-    );
+      });
 
-    // 4. Sync Order Sticky Notes
-    const unsubscribeNotes = watchCollection<StickyNote>(
-      cloudbaseCollections.notes,
-      async records => {
+    void listDocuments<StickyNote>(cloudbaseCollections.notes)
+      .then(async records => {
         if (records.length === 0) {
           const savedNotes = localStorage.getItem("order_sticky_notes");
-          if (savedNotes) {
-            try {
-              const parsed = JSON.parse(savedNotes) as Record<string, StickyNote>;
-              setNotes(parsed);
-              await replaceRecordCollection(cloudbaseCollections.notes, parsed, {});
-            } catch (e) {
-              console.error("Failed to seed sticky notes to CloudBase:", e);
-            }
-          }
-        } else {
-          const liveNotes: Record<string, StickyNote> = {};
-          records.forEach(record => {
-            liveNotes[record.poId] = record;
-          });
-          setNotes(liveNotes);
+          if (!savedNotes) return;
+          const parsed = JSON.parse(savedNotes) as Record<string, StickyNote>;
+          setNotes(parsed);
+          await replaceRecordCollection(cloudbaseCollections.notes, parsed, {});
+          return;
         }
-      },
-      error => {
+
+        const liveNotes: Record<string, StickyNote> = {};
+        records.forEach(record => {
+          liveNotes[record.poId] = record;
+        });
+        setNotes(liveNotes);
+      })
+      .catch(error => {
         try {
           handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.notes);
         } catch (handledError) {
           console.error(handledError);
         }
-      },
-    );
+      });
 
-    const unsubscribeLedgerBackups = watchCollection<LedgerBackup>(
-      cloudbaseCollections.ledgerBackups,
-      records => {
+    void listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups)
+      .then(records => {
         const { activeBackups } = filterExpiredBackups(records);
         setLatestRemoteLedgerBackup(getLatestLedgerBackup(activeBackups));
-      },
-      error => {
+      })
+      .catch(error => {
         try {
           handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.ledgerBackups);
         } catch (handledError) {
           console.error(handledError);
         }
-      },
-    );
+      });
 
     return () => {
-      unsubscribeInv();
-      unsubscribeSamples();
-      unsubscribeNotes();
-      unsubscribeLedgerBackups();
       clearInterval(clockInterval);
     };
   }, [authStatus, userAccess.mode]);
