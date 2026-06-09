@@ -24,9 +24,15 @@
     "delete": true
   },
   "buyer_system_view_settings": {
-    "read": "auth.uid != null",
-    "create": "auth.uid != null",
-    "update": "auth.uid != null",
-    "delete": "auth.uid != null"
+    "read": true,
+    "create": true,
+    "update": true,
+    "delete": true
+  },
+  "system_users": {
+    "read": true,
+    "create": true,
+    "update": false,
+    "delete": false
   }
 }
