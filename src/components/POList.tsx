@@ -30,6 +30,7 @@ import {
   type CloudbaseAuthUser,
   type LedgerViewSettings,
 } from '../lib/cloudbaseData';
+import PODetailDrawer from './PODetailDrawer';
 
 interface POListProps {
   purchaseOrders: PurchaseOrder[];
@@ -383,6 +384,13 @@ export default function POList({
     poId: string;
     itemName: string;
   } | null>(null);
+
+  // 行点击打开 PO 详情抽屉
+  const [detailDrawerPOId, setDetailDrawerPOId] = useState<string | null>(null);
+  const detailDrawerPO = useMemo(
+    () => (detailDrawerPOId ? purchaseOrders.find(po => po.id === detailDrawerPOId) ?? null : null),
+    [detailDrawerPOId, purchaseOrders],
+  );
 
   // Row Height State: 'compact' | 'medium' | 'relaxed' with persistence
   const [rowHeight, setRowHeight] = useState<'compact' | 'medium' | 'relaxed'>(() => {
@@ -1439,9 +1447,9 @@ export default function POList({
             const visibleRows = sortedLedgerRows.slice(startIndex, endIndex);
 
             return (
-              <table 
+              <table
                 style={{ width: totalWidth, minWidth: totalWidth, tableLayout: 'fixed' }}
-                className="text-left border-collapse select-none"
+                className="text-left border-collapse"
               >
                 <thead>
                   <tr className="bg-slate-900 text-slate-200 font-sans text-[10px] tracking-wider border-b border-slate-800 uppercase sticky top-0 z-20 shadow-sm">
@@ -1524,13 +1532,40 @@ export default function POList({
                         const bgClass = row._bgGroup === 1 ? 'bg-[#F8FAFC]' : 'bg-white';
 
                         return (
-                          <tr 
-                            key={`${row.id}-${row.code}-${idx}`} 
+                          <tr
+                            key={`${row.id}-${row.code}-${idx}`}
                             style={{ height: singleRowHeight }}
-                            className={`hover:bg-blue-50/30 transition-colors group ${bgClass}`}
+                            className={`hover:bg-blue-50/30 transition-colors group cursor-pointer ${bgClass}`}
+                            onMouseDownCapture={event => {
+                              // 记录按下时的坐标，配合 onClick 判断是否拖选过文字
+                              const target = event.currentTarget as HTMLTableRowElement & { __mouseDownX?: number; __mouseDownY?: number };
+                              target.__mouseDownX = event.clientX;
+                              target.__mouseDownY = event.clientY;
+                            }}
+                            onClick={event => {
+                              // 点中链接 / 按钮 / 输入框等交互元素时不打开抽屉
+                              const interactive = (event.target as HTMLElement).closest('button, a, input, select, textarea, label, .po-row-no-detail');
+                              if (interactive) return;
+
+                              // 有文本选区时不打开抽屉（让用户复制）
+                              const selection = typeof window !== 'undefined' ? window.getSelection() : null;
+                              if (selection && selection.toString().trim().length > 0) return;
+
+                              // 鼠标拖动距离大于 4px 视为选区操作，不打开抽屉
+                              const target = event.currentTarget as HTMLTableRowElement & { __mouseDownX?: number; __mouseDownY?: number };
+                              if (
+                                typeof target.__mouseDownX === 'number' &&
+                                typeof target.__mouseDownY === 'number' &&
+                                Math.hypot(event.clientX - target.__mouseDownX, event.clientY - target.__mouseDownY) > 4
+                              ) {
+                                return;
+                              }
+
+                              setDetailDrawerPOId(row.id);
+                            }}
                           >
-                            <td 
-                              style={{ width: 60, minWidth: 60, maxWidth: 60, height: singleRowHeight }} 
+                            <td
+                              style={{ width: 60, minWidth: 60, maxWidth: 60, height: singleRowHeight }}
                               className={`${getRowPaddingClass(rowHeight)} text-center sticky left-0 font-semibold text-slate-400 border-r border-[#E2E8F0] z-10 ${bgClass}`}
                             >
                               <div className="flex items-center justify-center w-full h-full">
@@ -1548,16 +1583,16 @@ export default function POList({
                               const isRemarkField = col.field === 'remarks' || col.field === 'remark';
                               
                               return (
-                                <td 
-                                  key={col.field} 
+                                <td
+                                  key={col.field}
                                   rowSpan={isPOField ? rowSpanCount : 1}
-                                  style={{ 
-                                    width: colWidth, 
-                                    minWidth: colWidth, 
+                                  style={{
+                                    width: colWidth,
+                                    minWidth: colWidth,
                                     maxWidth: colWidth,
                                     height: isPOField ? singleRowHeight * rowSpanCount : singleRowHeight
                                   }}
-                                  className={`${getRowPaddingClass(rowHeight)} border-r border-slate-150 align-middle truncate ${
+                                  className={`${getRowPaddingClass(rowHeight)} border-r border-slate-150 align-middle truncate select-text ${
                                     isRemarkField ? 'cursor-zoom-in hover:bg-blue-50/40 transition-colors' : ''
                                   }`}
                                   title={
@@ -1675,6 +1710,12 @@ export default function POList({
           </div>
         )}
       </AnimatePresence>
+
+      <PODetailDrawer
+        open={detailDrawerPOId !== null}
+        po={detailDrawerPO}
+        onClose={() => setDetailDrawerPOId(null)}
+      />
     </div>
   );
 }
