@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { Briefcase, Calendar, Clock, MessageSquare, Sliders, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { PurchaseOrder } from '../types';
+import { OrderItem, PurchaseOrder } from '../types';
 
 const DEFAULT_DRAWER_FIELDS = {
   supplier: true,
@@ -12,10 +12,87 @@ const DEFAULT_DRAWER_FIELDS = {
   progress: true,
 } as const;
 
+// 物料行可选展示字段 (key 对应 OrderItem 上的字段，或 'subtotal' 等计算值)
+type ItemFieldKey =
+  | 'price'
+  | 'orderedQty'
+  | 'basicQty'
+  | 'executedQty'
+  | 'executedBasicQty'
+  | 'unexecutedQty'
+  | 'unexecutedBasicQty'
+  | 'executedInboundQty'
+  | 'executedNotInboundQty'
+  | 'executionRate'
+  | 'rowExecutionStatus'
+  | 'rowInboundStatus'
+  | 'taxRate'
+  | 'taxAmount'
+  | 'category'
+  | 'daysRemaining'
+  | 'lastInboundDate'
+  | 'inboundDate'
+  | 'customerName'
+  | 'sourceOrderId'
+  | 'remark'
+  | 'subtotal';
+
+const ITEM_FIELD_LABELS: Record<ItemFieldKey, string> = {
+  price: '采购单价',
+  orderedQty: '采购数量',
+  basicQty: '基本数量',
+  executedQty: '已执行数量',
+  executedBasicQty: '已执行基本数量',
+  unexecutedQty: '未执行数量',
+  unexecutedBasicQty: '未执行基本数量',
+  executedInboundQty: '已执行已入库',
+  executedNotInboundQty: '已执行未入库',
+  executionRate: '执行比例',
+  rowExecutionStatus: '行执行状态',
+  rowInboundStatus: '行入库状态',
+  taxRate: '税率',
+  taxAmount: '税额',
+  category: '商品类别',
+  daysRemaining: '剩余备货天数',
+  lastInboundDate: '最近入库日期',
+  inboundDate: '实际入库时间',
+  customerName: '客户名称',
+  sourceOrderId: '源单单号',
+  remark: '行备注',
+  subtotal: '小计金额',
+};
+
+const DEFAULT_ITEM_FIELDS: Record<ItemFieldKey, boolean> = {
+  price: true,
+  orderedQty: true,
+  executedQty: true,
+  unexecutedQty: true,
+  subtotal: true,
+  basicQty: false,
+  executedBasicQty: false,
+  unexecutedBasicQty: false,
+  executedInboundQty: false,
+  executedNotInboundQty: false,
+  executionRate: false,
+  rowExecutionStatus: false,
+  rowInboundStatus: false,
+  taxRate: false,
+  taxAmount: false,
+  category: false,
+  daysRemaining: false,
+  lastInboundDate: false,
+  inboundDate: false,
+  customerName: false,
+  sourceOrderId: false,
+  remark: false,
+};
+
 type DrawerFields = Record<keyof typeof DEFAULT_DRAWER_FIELDS, boolean>;
+type ItemFields = Record<ItemFieldKey, boolean>;
 type DrawerCols = 1 | 2;
 
 const STORAGE_KEY_FIELDS = 'po_detail_drawer_fields';
+const STORAGE_KEY_ITEM_FIELDS = 'po_detail_drawer_item_fields';
 const STORAGE_KEY_COLS = 'po_detail_drawer_cols';
 
 function readStoredFields(): DrawerFields {
@@ -31,6 +108,22 @@ function readStoredFields(): DrawerFields {
     return merged;
   } catch {
     return { ...DEFAULT_DRAWER_FIELDS };
+  }
+}
+
+function readStoredItemFields(): ItemFields {
+  if (typeof window === 'undefined') return { ...DEFAULT_ITEM_FIELDS };
+  try {
+    const saved = window.localStorage.getItem(STORAGE_KEY_ITEM_FIELDS);
+    if (!saved) return { ...DEFAULT_ITEM_FIELDS };
+    const parsed = JSON.parse(saved) as Partial<ItemFields>;
+    const merged: ItemFields = { ...DEFAULT_ITEM_FIELDS };
+    for (const key of Object.keys(merged) as ItemFieldKey[]) {
+      if (typeof parsed[key] === 'boolean') merged[key] = parsed[key] as boolean;
+    }
+    return merged;
+  } catch {
+    return { ...DEFAULT_ITEM_FIELDS };
   }
 }
 
@@ -57,6 +150,7 @@ interface PODetailDrawerProps {
 
 export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jumpLabel }: PODetailDrawerProps) {
   const [drawerFields, setDrawerFields] = useState<DrawerFields>(readStoredFields);
+  const [itemFields, setItemFields] = useState<ItemFields>(readStoredItemFields);
   const [drawerCols, setDrawerCols] = useState<DrawerCols>(readStoredCols);
   const [showDrawerConfig, setShowDrawerConfig] = useState(false);
 
@@ -64,6 +158,11 @@ export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jump
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(STORAGE_KEY_FIELDS, JSON.stringify(drawerFields));
   }, [drawerFields]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(STORAGE_KEY_ITEM_FIELDS, JSON.stringify(itemFields));
+  }, [itemFields]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -124,7 +223,7 @@ export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jump
 
             {/* Config panel */}
             {showDrawerConfig && (
-              <div className="bg-white p-4 border-b border-slate-200 shadow-inner space-y-4">
+              <div className="bg-white p-4 border-b border-slate-200 shadow-inner space-y-4 max-h-[55vh] overflow-y-auto">
                 <div>
                   <span className="text-[9px] font-bold uppercase tracking-wider text-slate-450 block mb-1.5 font-mono">
                     每行显示数量 / COLS
@@ -146,7 +245,7 @@ export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jump
 
                 <div>
                   <span className="text-[9px] font-bold uppercase tracking-wider text-slate-450 block mb-1.5 font-mono">
-                    自定义展示字段 / FIELDS
+                    单据级展示字段 / PO FIELDS
                   </span>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {([
@@ -169,6 +268,49 @@ export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jump
                     ))}
                   </div>
                 </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-slate-450 block font-mono">
+                      物料行展示字段 / ITEM FIELDS
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setItemFields({ ...DEFAULT_ITEM_FIELDS })}
+                        className="px-2 py-0.5 text-[9px] font-bold rounded border border-slate-200 text-slate-500 hover:bg-slate-50"
+                      >
+                        重置默认
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setItemFields(prev => {
+                            const next = { ...prev };
+                            for (const key of Object.keys(next) as ItemFieldKey[]) next[key] = true;
+                            return next;
+                          })
+                        }
+                        className="px-2 py-0.5 text-[9px] font-bold rounded border border-slate-200 text-slate-500 hover:bg-slate-50"
+                      >
+                        全选
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {(Object.keys(ITEM_FIELD_LABELS) as ItemFieldKey[]).map(key => (
+                      <label key={key} className="flex items-center gap-1.5 rounded cursor-pointer text-[11px] font-bold text-slate-600">
+                        <input
+                          type="checkbox"
+                          checked={itemFields[key]}
+                          onChange={event => setItemFields(prev => ({ ...prev, [key]: event.target.checked }))}
+                          className="w-3.5 h-3.5 text-[#2563EB] rounded border-slate-300 focus:ring-[#2563EB]"
+                        />
+                        {ITEM_FIELD_LABELS[key]}
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -179,7 +321,7 @@ export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jump
                   未找到该订单的详细信息 / INFO NOT FOUND
                 </div>
               ) : (
-                <PODetailBody po={po} drawerCols={drawerCols} drawerFields={drawerFields} />
+                <PODetailBody po={po} drawerCols={drawerCols} drawerFields={drawerFields} itemFields={itemFields} />
               )}
             </div>
 
@@ -206,10 +348,50 @@ interface PODetailBodyProps {
   po: PurchaseOrder;
   drawerCols: DrawerCols;
   drawerFields: DrawerFields;
+  itemFields: ItemFields;
 }
 
-function PODetailBody({ po, drawerCols, drawerFields }: PODetailBodyProps) {
+function formatItemFieldValue(item: OrderItem, key: ItemFieldKey): string | null {
+  if (key === 'subtotal') {
+    const value = item.orderedQty * item.price;
+    return `¥${value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  const raw = item[key as keyof OrderItem];
+  if (raw === undefined || raw === null || raw === '') return null;
+
+  if (key === 'price' || key === 'taxAmount') {
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return String(raw);
+    return `¥${num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  if (key === 'taxRate' || key === 'executionRate') {
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return String(raw);
+    return `${num}%`;
+  }
+
+  if (key === 'orderedQty' || key === 'basicQty' || key === 'executedQty' || key === 'executedBasicQty'
+    || key === 'unexecutedQty' || key === 'unexecutedBasicQty' || key === 'executedInboundQty'
+    || key === 'executedNotInboundQty') {
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return String(raw);
+    return `${num.toLocaleString()} ${item.unit ?? ''}`.trim();
+  }
+
+  if (key === 'daysRemaining') {
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return String(raw);
+    return `${num} 天`;
+  }
+
+  return String(raw);
+}
+
+function PODetailBody({ po, drawerCols, drawerFields, itemFields }: PODetailBodyProps) {
   const totalPOAmount = po.items.reduce((sum, item) => sum + (item.orderedQty * item.price), 0);
+  const activeItemFieldKeys = (Object.keys(ITEM_FIELD_LABELS) as ItemFieldKey[]).filter(key => itemFields[key]);
 
   return (
     <div className="space-y-6">
@@ -315,44 +497,40 @@ function PODetailBody({ po, drawerCols, drawerFields }: PODetailBodyProps) {
           </div>
 
           <div className={`grid gap-3 ${drawerCols === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-            {po.items.map((item, idx) => {
-              const rowTotal = item.orderedQty * item.price;
-              return (
-                <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-start justify-between gap-1 border-b border-slate-105 pb-2 mb-2">
-                      <div className="min-w-0">
-                        <span className="font-bold text-slate-800 text-xs block truncate" title={item.name}>{item.name}</span>
-                        <span className="text-[10px] font-mono text-slate-400 block truncate" title={item.spec}>
-                          规格: {item.spec}
-                        </span>
-                      </div>
-                      <span className="text-[9px] bg-slate-100 text-slate-500 font-mono px-1.5 py-0.5 rounded font-bold shrink-0">
-                        #{idx + 1}
+            {po.items.map((item, idx) => (
+              <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                <div>
+                  <div className="flex items-start justify-between gap-1 border-b border-slate-105 pb-2 mb-2">
+                    <div className="min-w-0">
+                      <span className="font-bold text-slate-800 text-xs block truncate" title={item.name}>{item.name}</span>
+                      <span className="text-[10px] font-mono text-slate-400 block truncate" title={item.spec}>
+                        规格: {item.spec}
                       </span>
                     </div>
+                    <span className="text-[9px] bg-slate-100 text-slate-500 font-mono px-1.5 py-0.5 rounded font-bold shrink-0">
+                      #{idx + 1}
+                    </span>
+                  </div>
 
-                    <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono text-slate-500 mb-2">
-                      <div>
-                        <span className="text-slate-400 block font-sans text-[9px]">采购单价</span>
-                        <strong className="text-slate-700">¥{item.price.toFixed(2)}</strong>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-slate-400 block font-sans text-[9px]">采购数量</span>
-                        <strong className="text-slate-700">
-                          {item.orderedQty} <span className="font-sans text-slate-400 text-[9px]">{item.unit}</span>
-                        </strong>
-                      </div>
+                  {activeItemFieldKeys.length === 0 ? (
+                    <p className="text-[10px] text-slate-400 font-mono">在「显示与布局 → 物料行展示字段」勾选要显示的字段</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10px] font-mono text-slate-500">
+                      {activeItemFieldKeys.map(key => {
+                        const display = formatItemFieldValue(item, key);
+                        if (display === null) return null;
+                        return (
+                          <div key={key} className="flex items-baseline justify-between gap-2 min-w-0">
+                            <span className="text-slate-400 font-sans text-[9px] shrink-0">{ITEM_FIELD_LABELS[key]}</span>
+                            <strong className="text-slate-700 truncate text-right" title={display}>{display}</strong>
+                          </div>
+                        );
+                      })}
                     </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <span className="text-slate-450 font-mono text-[9px]">小计 / SUBTOTAL:</span>
-                    <strong className="font-mono text-slate-700">¥{rowTotal.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</strong>
-                  </div>
+                  )}
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         </div>
       )}
