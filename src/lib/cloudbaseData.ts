@@ -1,9 +1,4 @@
-import cloudbase from '@cloudbase/js-sdk';
-import { InventoryItem, PurchaseOrder, SampleRecord, StickyNote } from '../types';
-
-type CloudbaseConfig = Parameters<typeof cloudbase.init>[0];
-type CloudbaseApp = ReturnType<typeof cloudbase.init>;
-type CloudbaseAuth = ReturnType<CloudbaseApp['auth']>;
+import { PurchaseOrder, SampleRecord } from '../types';
 
 type ViteCloudbaseEnv = {
   readonly VITE_CLOUDBASE_ENV_ID?: string;
@@ -42,14 +37,6 @@ export type BuyerSystemAccessMode = 'full' | 'ledgerUploadOnly' | 'none';
 export interface BuyerSystemAccess {
   mode: BuyerSystemAccessMode;
   label: string;
-}
-
-export type CloudbaseOtpMethod = 'phone' | 'email';
-
-export interface CloudbaseOtpChallenge {
-  method: CloudbaseOtpMethod;
-  target: string;
-  verify: (code: string) => Promise<CloudbaseAuthUser>;
 }
 
 export type DashboardViewSettings = {
@@ -98,9 +85,9 @@ export type CollectionName =
   | 'ledger_backups'
   | 'buyer_system_view_settings';
 
-const DEFAULT_REGION = 'ap-shanghai';
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
 const LEDGER_BACKUP_TTL_MS = 5 * 24 * 60 * 60 * 1000;
+
 const viteCloudbaseEnv: ViteCloudbaseEnv = {
   VITE_CLOUDBASE_ENV_ID:
     typeof import.meta.env === 'undefined' ? undefined : import.meta.env.VITE_CLOUDBASE_ENV_ID,
@@ -111,17 +98,6 @@ const viteCloudbaseEnv: ViteCloudbaseEnv = {
   VITE_CLOUDBASE_DATABASE:
     typeof import.meta.env === 'undefined' ? undefined : import.meta.env.VITE_CLOUDBASE_DATABASE,
 };
-
-let cloudbaseApp: CloudbaseApp | null = null;
-let cloudbaseAuth: CloudbaseAuth | null = null;
-
-function requiredCloudbaseEnvId(): string {
-  const envId = getOptionalEnvValue('VITE_CLOUDBASE_ENV_ID');
-  if (!envId) {
-    throw new Error('缺少 VITE_CLOUDBASE_ENV_ID，请在 .env.local 中配置 CloudBase 环境 ID。');
-  }
-  return envId;
-}
 
 function getOptionalEnvValue(key: keyof ViteCloudbaseEnv): string | undefined {
   const value = viteCloudbaseEnv[key]?.trim();
@@ -164,30 +140,6 @@ function clearStoredAuthUser(): void {
   } catch {
     // ignore
   }
-}
-
-function getCloudbaseApp(): CloudbaseApp {
-  if (!cloudbaseApp) {
-    const config: CloudbaseConfig = {
-      env: requiredCloudbaseEnvId(),
-      region: getOptionalEnvValue('VITE_CLOUDBASE_REGION') ?? DEFAULT_REGION,
-      auth: {
-        detectSessionInUrl: true,
-      },
-    };
-
-    const accessKey = getOptionalEnvValue('VITE_CLOUDBASE_ACCESS_KEY');
-    if (accessKey) {
-      config.accessKey = accessKey;
-    }
-
-    cloudbaseApp = cloudbase.init(config);
-  }
-  return cloudbaseApp;
-}
-
-function isCloudbaseRecord(value: unknown): value is CloudbaseRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function normalizeCloudbaseDocumentId(id: string): string {
@@ -246,14 +198,9 @@ export function handleCloudbaseError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.error('CloudBase Error:', JSON.stringify(errInfo));
+  console.error('Data API Error:', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
-
-function readStringField(_source: Record<string, unknown>, _field: string): string | null {
-  return null;
-}
-void readStringField;
 
 export function normalizeCloudbaseUsername(username: string): string {
   return username.trim();
@@ -312,56 +259,6 @@ export function validateCloudbaseLoginInput(username: string, password: string):
   return null;
 }
 
-export function normalizeCloudbaseOtpTarget(method: CloudbaseOtpMethod, target: string): string {
-  const trimmed = target.trim();
-  if (method === 'email') {
-    return trimmed;
-  }
-
-  const compact = trimmed.replace(/[\s-]/g, '');
-  if (compact.startsWith('+')) {
-    return `+${compact.slice(1).replace(/\D/g, '')}`;
-  }
-
-  const digits = compact.replace(/\D/g, '');
-  if (/^1\d{10}$/.test(digits)) {
-    return `+86${digits}`;
-  }
-
-  return digits;
-}
-
-export function validateCloudbaseOtpTarget(method: CloudbaseOtpMethod, target: string): string | null {
-  const normalized = normalizeCloudbaseOtpTarget(method, target);
-  if (!normalized) {
-    if (method === 'phone' && target.trim()) {
-      return '请输入有效手机号，国内手机号可直接输入 11 位数字。';
-    }
-    return method === 'phone' ? '请输入手机号。' : '请输入邮箱地址。';
-  }
-
-  if (method === 'phone') {
-    if (!/^\+\d{8,16}$/.test(normalized)) {
-      return '请输入有效手机号，国内手机号可直接输入 11 位数字。';
-    }
-    return null;
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
-    return '请输入有效邮箱地址。';
-  }
-
-  return null;
-}
-
-export function validateCloudbaseOtpCode(code: string): string | null {
-  if (!code.trim()) {
-    return '请输入验证码。';
-  }
-
-  return null;
-}
-
 export async function getCurrentCloudbaseUser(): Promise<CloudbaseAuthUser | null> {
   return readStoredAuthUser();
 }
@@ -403,12 +300,6 @@ export async function signInToCloudbase(username: string, password: string): Pro
 
   writeStoredAuthUser(user);
   return user;
-}
-
-export async function sendCloudbaseOtp(_method: CloudbaseOtpMethod, _rawTarget: string): Promise<CloudbaseOtpChallenge> {
-  void _method;
-  void _rawTarget;
-  throw new Error('当前系统已切换为账号密码登录，验证码登录已下线。');
 }
 
 export async function signOutFromCloudbase(): Promise<void> {

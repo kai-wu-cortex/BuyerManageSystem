@@ -13,7 +13,6 @@
     "test": "tsx src/lib/cloudbaseData.test.ts && tsx src/lib/geminiSampleParser.test.ts"
   },
   "dependencies": {
-    "@cloudbase/js-sdk": "^3.3.13",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vercel/functions": "^3.7.0",
