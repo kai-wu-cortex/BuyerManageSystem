@@ -1,25 +1,64 @@
 import React, { useState } from 'react';
-import { Cloud, LockKeyhole, ShieldCheck, UserRound } from 'lucide-react';
+import { Cloud, KeyRound, LockKeyhole, Mail, Phone, ShieldCheck, UserRound } from 'lucide-react';
+import type { CloudbaseOtpMethod } from '../lib/cloudbaseData';
+
+type LoginMode = 'password' | CloudbaseOtpMethod;
 
 interface SystemLoginProps {
   isConfigured: boolean;
   isSigningIn: boolean;
+  isSendingOtp: boolean;
+  otpMethod: CloudbaseOtpMethod | null;
+  otpTarget: string | null;
   error: string | null;
   onSignIn: (username: string, password: string) => Promise<void>;
+  onSendOtp: (method: CloudbaseOtpMethod, target: string) => Promise<void>;
+  onVerifyOtp: (code: string) => Promise<void>;
 }
+
+const loginModes: { id: LoginMode; label: string }[] = [
+  { id: 'password', label: '账号密码' },
+  { id: 'phone', label: '短信验证码' },
+  { id: 'email', label: '邮箱验证' },
+];
 
 export default function SystemLogin({
   isConfigured,
   isSigningIn,
+  isSendingOtp,
+  otpMethod,
+  otpTarget,
   error,
   onSignIn,
+  onSendOtp,
+  onVerifyOtp,
 }: SystemLoginProps) {
+  const [mode, setMode] = useState<LoginMode>('password');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const activeOtpTarget = otpMethod === mode ? otpTarget : null;
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void onSignIn(username, password);
+    if (mode === 'password') {
+      void onSignIn(username, password);
+      return;
+    }
+
+    if (!activeOtpTarget) {
+      void onSendOtp(mode, mode === 'phone' ? phone : email);
+      return;
+    }
+
+    void onVerifyOtp(otpCode);
+  };
+
+  const handleModeChange = (nextMode: LoginMode) => {
+    setMode(nextMode);
+    setOtpCode('');
   };
 
   return (
@@ -33,7 +72,7 @@ export default function SystemLogin({
               </div>
               <div>
                 <h1 className="text-xl font-black tracking-tight">NovaSpark Buyer System</h1>
-                <p className="text-xs font-semibold text-slate-400 mt-0.5">采购管理系统 v4.2</p>
+                <p className="text-xs font-semibold text-slate-400 mt-0.5">CloudBase Identity Gateway</p>
               </div>
             </div>
 
@@ -42,7 +81,7 @@ export default function SystemLogin({
                 采购系统登入验证
               </p>
               <p className="text-sm leading-6 text-slate-300">
-                使用系统账号密码登入，业务数据会在登入后连接云端数据库。
+                使用 CloudBase SDK 认证账号进入系统，业务数据会在登入后再连接云端数据库。
               </p>
             </div>
           </div>
@@ -54,7 +93,7 @@ export default function SystemLogin({
             </div>
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
               <p className="font-mono text-slate-500">AUTH</p>
-              <p className="mt-1 font-bold text-emerald-300">数据库账号认证</p>
+              <p className="mt-1 font-bold text-emerald-300">Password / SMS / Email</p>
             </div>
           </div>
         </section>
@@ -71,35 +110,110 @@ export default function SystemLogin({
           </div>
 
           <form className="space-y-5" onSubmit={handleSubmit}>
-            <label className="block">
-              <span className="text-xs font-black text-slate-600">用户名</span>
-              <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100">
-                <UserRound className="h-4 w-4 text-slate-400" />
-                <input
-                  value={username}
-                  onChange={event => setUsername(event.target.value)}
-                  autoComplete="username"
-                  className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-slate-400"
-                  placeholder="系统用户名"
-                  type="text"
-                />
-              </span>
-            </label>
+            <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-100 p-1">
+              {loginModes.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleModeChange(item.id)}
+                  className={`rounded-md px-2 py-2 text-xs font-black transition ${
+                    mode === item.id
+                      ? 'bg-white text-blue-700 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
 
-            <label className="block">
-              <span className="text-xs font-black text-slate-600">密码</span>
-              <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100">
-                <LockKeyhole className="h-4 w-4 text-slate-400" />
-                <input
-                  value={password}
-                  onChange={event => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-slate-400"
-                  placeholder="系统密码"
-                  type="password"
-                />
-              </span>
-            </label>
+            {mode === 'password' && (
+              <>
+                <label className="block">
+                  <span className="text-xs font-black text-slate-600">用户名</span>
+                  <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100">
+                    <UserRound className="h-4 w-4 text-slate-400" />
+                    <input
+                      value={username}
+                      onChange={event => setUsername(event.target.value)}
+                      autoComplete="username"
+                      className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-slate-400"
+                      placeholder="CloudBase 用户名"
+                      type="text"
+                    />
+                  </span>
+                </label>
+
+                <label className="block">
+                  <span className="text-xs font-black text-slate-600">密码</span>
+                  <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100">
+                    <LockKeyhole className="h-4 w-4 text-slate-400" />
+                    <input
+                      value={password}
+                      onChange={event => setPassword(event.target.value)}
+                      autoComplete="current-password"
+                      className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-slate-400"
+                      placeholder="CloudBase 密码"
+                      type="password"
+                    />
+                  </span>
+                </label>
+              </>
+            )}
+
+            {mode === 'phone' && (
+              <label className="block">
+                <span className="text-xs font-black text-slate-600">手机号</span>
+                <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100">
+                  <Phone className="h-4 w-4 text-slate-400" />
+                  <input
+                    value={phone}
+                    onChange={event => setPhone(event.target.value)}
+                    autoComplete="tel"
+                    className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-slate-400"
+                    placeholder="13800138000 或 +8613800138000"
+                    type="tel"
+                  />
+                </span>
+              </label>
+            )}
+
+            {mode === 'email' && (
+              <label className="block">
+                <span className="text-xs font-black text-slate-600">邮箱</span>
+                <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100">
+                  <Mail className="h-4 w-4 text-slate-400" />
+                  <input
+                    value={email}
+                    onChange={event => setEmail(event.target.value)}
+                    autoComplete="email"
+                    className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-slate-400"
+                    placeholder="name@example.com"
+                    type="email"
+                  />
+                </span>
+              </label>
+            )}
+
+            {mode !== 'password' && activeOtpTarget && (
+              <label className="block">
+                <span className="text-xs font-black text-slate-600">验证码</span>
+                <span className="mt-2 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-100">
+                  <KeyRound className="h-4 w-4 text-slate-400" />
+                  <input
+                    value={otpCode}
+                    onChange={event => setOtpCode(event.target.value)}
+                    autoComplete="one-time-code"
+                    className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-slate-400"
+                    placeholder="输入收到的验证码"
+                    type="text"
+                  />
+                </span>
+                <span className="mt-2 block text-[11px] font-semibold text-slate-500">
+                  验证码已发送至 {activeOtpTarget}
+                </span>
+              </label>
+            )}
 
             {(!isConfigured || error) && (
               <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-600">
@@ -109,10 +223,18 @@ export default function SystemLogin({
 
             <button
               type="submit"
-              disabled={!isConfigured || isSigningIn}
+              disabled={!isConfigured || isSigningIn || isSendingOtp}
               className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-black text-white transition hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isSigningIn ? '正在验证...' : '登入'}
+              {isSigningIn
+                ? '正在验证...'
+                : isSendingOtp
+                  ? '正在发送...'
+                  : mode === 'password'
+                    ? '登入'
+                    : activeOtpTarget
+                      ? '验证并登入'
+                      : '发送验证码'}
             </button>
           </form>
         </section>

@@ -4,6 +4,7 @@ import { InventoryItem, PurchaseOrder, SampleRecord, StickyNote } from '../types
 type CloudbaseConfig = Parameters<typeof cloudbase.init>[0];
 type CloudbaseApp = ReturnType<typeof cloudbase.init>;
 type CloudbaseDatabase = ReturnType<CloudbaseApp['database']>;
+type CloudbaseAuth = ReturnType<CloudbaseApp['auth']>;
 
 type ViteCloudbaseEnv = {
   readonly VITE_CLOUDBASE_ENV_ID?: string;
@@ -41,7 +42,7 @@ export interface CloudbaseErrorInfo {
 export interface CloudbaseAuthUser {
   uid: string;
   username: string | null;
-  role: 'caigou' | 'caiwu' | null;
+  email: string | null;
 }
 
 export type BuyerSystemAccessMode = 'full' | 'ledgerUploadOnly' | 'none';
@@ -51,9 +52,13 @@ export interface BuyerSystemAccess {
   label: string;
 }
 
-const AUTH_SESSION_KEY = 'buyer_system_auth_session';
-const SALT_LENGTH = 16; // 128-bit salt
-const HASH_ALGORITHM = 'SHA-256';
+export type CloudbaseOtpMethod = 'phone' | 'email';
+
+export interface CloudbaseOtpChallenge {
+  method: CloudbaseOtpMethod;
+  target: string;
+  verify: (code: string) => Promise<CloudbaseAuthUser>;
+}
 
 export type DashboardViewSettings = {
   timelineCols: 1 | 2 | 3 | 4;
@@ -99,16 +104,7 @@ export type CollectionName =
   | 'sample_records'
   | 'order_sticky_notes'
   | 'ledger_backups'
-  | 'buyer_system_view_settings'
-  | 'system_users';
-
-export interface SystemUser {
-  username: string;
-  passwordHash: string;
-  salt: string;
-  role: 'caigou' | 'caiwu';
-  createdAt: string;
-}
+  | 'buyer_system_view_settings';
 
 const DEFAULT_REGION = 'ap-shanghai';
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
@@ -126,6 +122,8 @@ const viteCloudbaseEnv: ViteCloudbaseEnv = {
 
 let cloudbaseApp: CloudbaseApp | null = null;
 let cloudbaseDb: CloudbaseDatabase | null = null;
+let cloudbaseAuth: CloudbaseAuth | null = null;
+let cloudbaseAuthPromise: Promise<void> | null = null;
 
 function requiredCloudbaseEnvId(): string {
   const envId = getOptionalEnvValue('VITE_CLOUDBASE_ENV_ID');
@@ -149,6 +147,9 @@ function getCloudbaseApp(): CloudbaseApp {
     const config: CloudbaseConfig = {
       env: requiredCloudbaseEnvId(),
       region: getOptionalEnvValue('VITE_CLOUDBASE_REGION') ?? DEFAULT_REGION,
+      auth: {
+        detectSessionInUrl: true,
+      },
     };
 
     const accessKey = getOptionalEnvValue('VITE_CLOUDBASE_ACCESS_KEY');
@@ -161,6 +162,13 @@ function getCloudbaseApp(): CloudbaseApp {
   return cloudbaseApp;
 }
 
+function getCloudbaseAuth(): CloudbaseAuth {
+  if (!cloudbaseAuth) {
+    cloudbaseAuth = getCloudbaseApp().auth({ persistence: 'local' });
+  }
+  return cloudbaseAuth;
+}
+
 function getCloudbaseDb(): CloudbaseDatabase {
   if (!cloudbaseDb) {
     const database = getOptionalEnvValue('VITE_CLOUDBASE_DATABASE');
@@ -169,85 +177,17 @@ function getCloudbaseDb(): CloudbaseDatabase {
   return cloudbaseDb;
 }
 
-// ─── Password Hashing (Web Crypto API) ──────────────────────────────────────
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+async function ensureCloudbaseAuth(): Promise<void> {
+  if (!cloudbaseAuthPromise) {
+    cloudbaseAuthPromise = (async () => {
+      await getCurrentCloudbaseUser();
+    })().catch(error => {
+      cloudbaseAuthPromise = null;
+      throw error;
+    });
   }
-  return bytes;
-}
 
-function generateSalt(length = SALT_LENGTH): string {
-  const array = new Uint8Array(length);
-  crypto.getRandomValues(array);
-  return bytesToHex(array);
-}
-
-async function hashPassword(password: string, salt: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const saltedPassword = salt + password;
-  const data = encoder.encode(saltedPassword);
-  const hash = await crypto.subtle.digest(HASH_ALGORITHM, data);
-  return bytesToHex(new Uint8Array(hash));
-}
-
-async function verifyPassword(password: string, salt: string, storedHash: string): Promise<boolean> {
-  const computedHash = await hashPassword(password, salt);
-  // Constant-time comparison to prevent timing attacks
-  if (computedHash.length !== storedHash.length) {
-    return false;
-  }
-  let result = 0;
-  for (let i = 0; i < computedHash.length; i++) {
-    result |= computedHash.charCodeAt(i) ^ storedHash.charCodeAt(i);
-  }
-  return result === 0;
-}
-
-// ─── Session Management ─────────────────────────────────────────────────────
-
-interface AuthSession {
-  uid: string;
-  username: string;
-  role: 'caigou' | 'caiwu' | null;
-  loginTime: string;
-}
-
-function saveAuthSession(user: AuthSession): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(user));
-  } catch {
-    // localStorage may be full or unavailable
-  }
-}
-
-function clearAuthSession(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.removeItem(AUTH_SESSION_KEY);
-  } catch {
-    // ignore
-  }
-}
-
-function readAuthSession(): AuthSession | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(AUTH_SESSION_KEY);
-    if (!raw) return null;
-    const session = JSON.parse(raw) as AuthSession;
-    if (!session.uid || !session.username) return null;
-    return session;
-  } catch {
-    return null;
-  }
+  await cloudbaseAuthPromise;
 }
 
 function isCloudbaseRecord(value: unknown): value is CloudbaseRecord {
@@ -325,20 +265,61 @@ export function handleCloudbaseError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+function readStringField(source: Record<string, unknown>, field: string): string | null {
+  const value = source[field];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readNestedStringField(source: Record<string, unknown>, objectField: string, nestedField: string): string | null {
+  const value = source[objectField];
+  if (!isCloudbaseRecord(value)) {
+    return null;
+  }
+
+  return readStringField(value, nestedField);
+}
+
+function getSessionUser(result: { data?: { session?: { user?: unknown }; user?: unknown }; error?: unknown }): CloudbaseAuthUser | null {
+  if (result.error) {
+    throw result.error;
+  }
+
+  const user = result.data?.session?.user ?? result.data?.user;
+  if (!isCloudbaseRecord(user)) {
+    return null;
+  }
+
+  const uid = readStringField(user, 'id') ?? readStringField(user, 'uid') ?? readStringField(user, '_id');
+  if (!uid) {
+    return null;
+  }
+
+  const isAnonymous = user.is_anonymous;
+  if (isAnonymous === true) {
+    return null;
+  }
+
+  return {
+    uid,
+    username: readStringField(user, 'username') ?? readNestedStringField(user, 'user_metadata', 'username'),
+    email: readStringField(user, 'email'),
+  };
+}
+
 export function normalizeCloudbaseUsername(username: string): string {
-  return username.trim().toLowerCase();
+  return username.trim();
 }
 
 export function getBuyerSystemAccess(user: CloudbaseAuthUser | null): BuyerSystemAccess {
-  const role = user?.role ?? null;
-  if (role === 'caigou') {
+  const username = user?.username?.trim().toLowerCase() ?? '';
+  if (username === 'caigou') {
     return {
       mode: 'full',
       label: '采购',
     };
   }
 
-  if (role === 'caiwu') {
+  if (username === 'caiwu') {
     return {
       mode: 'ledgerUploadOnly',
       label: '财务',
@@ -382,24 +363,63 @@ export function validateCloudbaseLoginInput(username: string, password: string):
   return null;
 }
 
-// ─── New: DB-based Authentication ──────────────────────────────────────────
+export function normalizeCloudbaseOtpTarget(method: CloudbaseOtpMethod, target: string): string {
+  const trimmed = target.trim();
+  if (method === 'email') {
+    return trimmed;
+  }
+
+  const compact = trimmed.replace(/[\s-]/g, '');
+  if (compact.startsWith('+')) {
+    return `+${compact.slice(1).replace(/\D/g, '')}`;
+  }
+
+  const digits = compact.replace(/\D/g, '');
+  if (/^1\d{10}$/.test(digits)) {
+    return `+86${digits}`;
+  }
+
+  return digits;
+}
+
+export function validateCloudbaseOtpTarget(method: CloudbaseOtpMethod, target: string): string | null {
+  const normalized = normalizeCloudbaseOtpTarget(method, target);
+  if (!normalized) {
+    if (method === 'phone' && target.trim()) {
+      return '请输入有效手机号，国内手机号可直接输入 11 位数字。';
+    }
+    return method === 'phone' ? '请输入手机号。' : '请输入邮箱地址。';
+  }
+
+  if (method === 'phone') {
+    if (!/^\+\d{8,16}$/.test(normalized)) {
+      return '请输入有效手机号，国内手机号可直接输入 11 位数字。';
+    }
+    return null;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    return '请输入有效邮箱地址。';
+  }
+
+  return null;
+}
+
+export function validateCloudbaseOtpCode(code: string): string | null {
+  if (!code.trim()) {
+    return '请输入验证码。';
+  }
+
+  return null;
+}
 
 export async function getCurrentCloudbaseUser(): Promise<CloudbaseAuthUser | null> {
   if (!isCloudbaseConfigured()) {
     return null;
   }
 
-  // Read session from localStorage
-  const session = readAuthSession();
-  if (!session) {
-    return null;
-  }
-
-  return {
-    uid: session.uid,
-    username: session.username,
-    role: session.role,
-  };
+  const result = await getCloudbaseAuth().getSession();
+  return getSessionUser(result);
 }
 
 export async function signInToCloudbase(username: string, password: string): Promise<CloudbaseAuthUser> {
@@ -408,59 +428,67 @@ export async function signInToCloudbase(username: string, password: string): Pro
     throw new Error(validationError);
   }
 
-  const normalizedUser = normalizeCloudbaseUsername(username);
-
-  // Query the system_users collection for this username
-  const result = await getCloudbaseDb().collection('system_users')
-    .where({ username: normalizedUser })
-    .limit(1)
-    .get();
-
-  if (typeof result.code === 'string') {
-    throw new Error(`数据库查询失败: ${result.message ?? result.code}`);
-  }
-
-  const records = result.data ?? [];
-  if (!Array.isArray(records) || records.length === 0) {
-    throw new Error('用户名或密码错误。');
-  }
-
-  const userDoc = records[0] as CloudbaseRecord;
-  const userHash = userDoc.passwordHash as string | undefined;
-  const userSalt = userDoc.salt as string | undefined;
-  const userRole = userDoc.role as string | undefined;
-
-  if (!userHash || !userSalt) {
-    throw new Error('用户数据异常，请联系管理员。');
-  }
-
-  // Verify password
-  const isValid = await verifyPassword(password, userSalt, userHash);
-  if (!isValid) {
-    throw new Error('用户名或密码错误。');
-  }
-
-  const role = (userRole === 'caigou' || userRole === 'caiwu') ? userRole as 'caigou' | 'caiwu' : null;
-
-  const sessionUser: CloudbaseAuthUser = {
-    uid: normalizedUser,
-    username: normalizedUser,
-    role,
-  };
-
-  // Save session to localStorage
-  saveAuthSession({
-    uid: sessionUser.uid,
-    username: sessionUser.username,
-    role: sessionUser.role,
-    loginTime: new Date().toISOString(),
+  const result = await getCloudbaseAuth().signInWithPassword({
+    username: normalizeCloudbaseUsername(username),
+    password,
   });
+  const user = getSessionUser(result);
+  if (!user) {
+    throw new Error('CloudBase 登录成功但未返回有效用户会话。');
+  }
 
-  return sessionUser;
+  cloudbaseAuthPromise = Promise.resolve();
+  return user;
+}
+
+export async function sendCloudbaseOtp(method: CloudbaseOtpMethod, rawTarget: string): Promise<CloudbaseOtpChallenge> {
+  const validationError = validateCloudbaseOtpTarget(method, rawTarget);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  const target = normalizeCloudbaseOtpTarget(method, rawTarget);
+  const result = method === 'phone'
+    ? await getCloudbaseAuth().signInWithOtp({ phone: target })
+    : await getCloudbaseAuth().signInWithOtp({ email: target });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  const verifyOtp = result.data.verifyOtp;
+  if (!verifyOtp) {
+    throw new Error('CloudBase 未返回验证码验证入口，请检查登录方式配置。');
+  }
+
+  return {
+    method,
+    target,
+    verify: async (code: string) => {
+      const codeValidationError = validateCloudbaseOtpCode(code);
+      if (codeValidationError) {
+        throw new Error(codeValidationError);
+      }
+
+      const signInResult = await verifyOtp({ token: code.trim() });
+      const user = getSessionUser(signInResult);
+      if (!user) {
+        throw new Error('CloudBase 验证成功但未返回有效用户会话。');
+      }
+
+      cloudbaseAuthPromise = Promise.resolve();
+      return user;
+    },
+  };
 }
 
 export async function signOutFromCloudbase(): Promise<void> {
-  clearAuthSession();
+  if (!isCloudbaseConfigured()) {
+    return;
+  }
+
+  await getCloudbaseAuth().signOut();
+  cloudbaseAuthPromise = null;
 }
 
 export function watchCollection<T>(
@@ -472,6 +500,7 @@ export function watchCollection<T>(
   let listener: WatchListener | null = null;
 
   void (async () => {
+    await ensureCloudbaseAuth();
     if (isClosed) return;
 
     listener = getCloudbaseDb().collection(collectionName).watch({
@@ -493,12 +522,14 @@ export function watchCollection<T>(
 }
 
 export async function listDocuments<T>(collectionName: CollectionName): Promise<T[]> {
+  await ensureCloudbaseAuth();
   const result = await getCloudbaseDb().collection(collectionName).limit(1000).get();
   assertNoSdkError(result, collectionName);
   return result.data.filter(isCloudbaseRecord).map(record => stripCloudbaseSystemFields<T>(record));
 }
 
 export async function getDocument<T>(collectionName: CollectionName, documentId: string): Promise<T | null> {
+  await ensureCloudbaseAuth();
   const id = normalizeCloudbaseDocumentId(documentId);
   const result = await getCloudbaseDb().collection(collectionName).doc(id).get();
   assertNoSdkError(result, `${collectionName}/${id}`);
@@ -517,6 +548,7 @@ export async function getDocument<T>(collectionName: CollectionName, documentId:
 }
 
 async function listDocumentIds(collectionName: CollectionName): Promise<string[]> {
+  await ensureCloudbaseAuth();
   const result = await getCloudbaseDb().collection(collectionName).limit(1000).get();
   assertNoSdkError(result, collectionName);
   return result.data.filter(isCloudbaseRecord).map(getCloudbaseDocumentId).filter((id): id is string => Boolean(id));
@@ -527,12 +559,14 @@ export async function setDocument<T extends object>(
   documentId: string,
   value: T,
 ): Promise<void> {
+  await ensureCloudbaseAuth();
   const id = normalizeCloudbaseDocumentId(documentId);
   const result = await getCloudbaseDb().collection(collectionName).doc(id).set(cleanUndefined(value));
   assertNoSdkError(result, `${collectionName}/${id}`);
 }
 
 export async function deleteDocument(collectionName: CollectionName, documentId: string): Promise<void> {
+  await ensureCloudbaseAuth();
   const id = normalizeCloudbaseDocumentId(documentId);
   const result = await getCloudbaseDb().collection(collectionName).doc(id).remove();
   assertNoSdkError(result, `${collectionName}/${id}`);
@@ -712,5 +746,4 @@ export const cloudbaseCollections = {
   notes: 'order_sticky_notes',
   ledgerBackups: 'ledger_backups',
   viewSettings: 'buyer_system_view_settings',
-  systemUsers: 'system_users',
 } as const satisfies Record<string, CollectionName>;

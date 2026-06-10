@@ -9,9 +9,12 @@ import {
   getLatestLedgerBackup,
   isLedgerBackupNewerThanLoaded,
   normalizeCloudbaseDocumentId,
+  normalizeCloudbaseOtpTarget,
   normalizeCloudbaseUsername,
   sortBackupsNewestFirst,
   validateCloudbaseLoginInput,
+  validateCloudbaseOtpCode,
+  validateCloudbaseOtpTarget,
 } from './cloudbaseData';
 
 const cleaned = cleanUndefined({
@@ -54,20 +57,30 @@ assert.equal(validateCloudbaseLoginInput('buyer_admin', 'secret123'), null);
 assert.equal(validateCloudbaseLoginInput('   ', 'secret123'), '请输入用户名。');
 assert.equal(validateCloudbaseLoginInput('buyer_admin', ''), '请输入密码。');
 
-assert.deepEqual(getBuyerSystemAccess({ uid: '1', username: 'caigou', role: 'caigou' }), {
+assert.equal(normalizeCloudbaseOtpTarget('phone', '138 0013 8000'), '+8613800138000');
+assert.equal(normalizeCloudbaseOtpTarget('phone', '+1 415-555-0100'), '+14155550100');
+assert.equal(normalizeCloudbaseOtpTarget('email', '  ops@example.com  '), 'ops@example.com');
+assert.equal(validateCloudbaseOtpTarget('phone', ''), '请输入手机号。');
+assert.equal(validateCloudbaseOtpTarget('phone', 'abc'), '请输入有效手机号，国内手机号可直接输入 11 位数字。');
+assert.equal(validateCloudbaseOtpTarget('email', 'ops@example.com'), null);
+assert.equal(validateCloudbaseOtpTarget('email', 'bad-mail'), '请输入有效邮箱地址。');
+assert.equal(validateCloudbaseOtpCode('123456'), null);
+assert.equal(validateCloudbaseOtpCode(''), '请输入验证码。');
+
+assert.deepEqual(getBuyerSystemAccess({ uid: '1', username: 'caigou', email: null }), {
   mode: 'full',
   label: '采购',
 });
-assert.deepEqual(getBuyerSystemAccess({ uid: '2', username: 'caiwu', role: 'caiwu' }), {
+assert.deepEqual(getBuyerSystemAccess({ uid: '2', username: 'caiwu', email: null }), {
   mode: 'ledgerUploadOnly',
   label: '财务',
 });
-assert.deepEqual(getBuyerSystemAccess({ uid: '3', username: 'ops', role: null }), {
+assert.deepEqual(getBuyerSystemAccess({ uid: '3', username: null, email: 'ops@example.com' }), {
   mode: 'none',
   label: '未授权',
 });
 
-const viewSettingsUser = { uid: 'user/采购 001', username: 'caigou', role: 'caigou' as const };
+const viewSettingsUser = { uid: 'user/采购 001', username: 'caigou', email: null };
 assert.equal(getBuyerSystemViewSettingsDocumentId(viewSettingsUser), 'buyer_system_view_settings_user____001');
 assert.deepEqual(
   createBuyerSystemViewSettingsRecord(

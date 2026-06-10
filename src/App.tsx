@@ -30,10 +30,13 @@ import {
   replaceCollection,
   replaceRecordCollection,
   saveLedgerBackup,
+  sendCloudbaseOtp,
   signInToCloudbase,
   signOutFromCloudbase,
   upsertDocuments,
   type CloudbaseAuthUser,
+  type CloudbaseOtpChallenge,
+  type CloudbaseOtpMethod,
   type LedgerBackup,
 } from './lib/cloudbaseData';
 import { 
@@ -107,6 +110,8 @@ export default function App() {
   const [authUser, setAuthUser] = useState<CloudbaseAuthUser | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [otpChallenge, setOtpChallenge] = useState<CloudbaseOtpChallenge | null>(null);
   const userAccess = getBuyerSystemAccess(authUser);
   
   // Navigation tabs: 'dashboard' | 'ledger' | 'inventory' | 'notes'
@@ -801,6 +806,43 @@ export default function App() {
       const user = await signInToCloudbase(username, password);
       setAuthUser(user);
       setAuthStatus('authenticated');
+      setOtpChallenge(null);
+    } catch (error) {
+      setAuthUser(null);
+      setAuthStatus('unauthenticated');
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSendOtp = async (method: CloudbaseOtpMethod, target: string) => {
+    setIsSendingOtp(true);
+    setAuthError(null);
+    try {
+      const challenge = await sendCloudbaseOtp(method, target);
+      setOtpChallenge(challenge);
+    } catch (error) {
+      setOtpChallenge(null);
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  const handleVerifyOtp = async (code: string) => {
+    if (!otpChallenge) {
+      setAuthError('请先发送验证码。');
+      return;
+    }
+
+    setIsSigningIn(true);
+    setAuthError(null);
+    try {
+      const user = await otpChallenge.verify(code);
+      setAuthUser(user);
+      setAuthStatus('authenticated');
+      setOtpChallenge(null);
     } catch (error) {
       setAuthUser(null);
       setAuthStatus('unauthenticated');
@@ -814,10 +856,11 @@ export default function App() {
     try {
       await signOutFromCloudbase();
     } catch (error) {
-      console.error('Sign out failed:', error);
+      console.error('CloudBase sign out failed:', error);
     } finally {
       setAuthUser(null);
       setAuthStatus('unauthenticated');
+      setOtpChallenge(null);
       setPurchaseOrders([]);
       setInventory([]);
       setSamples([]);
@@ -850,8 +893,13 @@ export default function App() {
       <SystemLogin
         isConfigured={isCloudbaseConfigured()}
         isSigningIn={isSigningIn}
+        isSendingOtp={isSendingOtp}
+        otpMethod={otpChallenge?.method ?? null}
+        otpTarget={otpChallenge?.target ?? null}
         error={authError}
         onSignIn={handleSignIn}
+        onSendOtp={handleSendOtp}
+        onVerifyOtp={handleVerifyOtp}
       />
     );
   }
@@ -1148,7 +1196,7 @@ export default function App() {
                 <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">CloudBase User</span>
                 <div className="flex items-center gap-2">
                   <span className="max-w-36 truncate font-mono text-xs font-bold text-slate-700">
-                    {authUser?.username ?? authUser?.uid ?? '已登入'}
+                    {authUser?.username ?? authUser?.email ?? authUser?.uid ?? '已登入'}
                   </span>
                   <button
                     onClick={handleSignOut}
