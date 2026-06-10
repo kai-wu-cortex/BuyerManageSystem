@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {
   cleanUndefined,
   createBuyerSystemViewSettingsRecord,
-  filterExpiredBackups,
   formatLedgerBackupSize,
   getBuyerSystemAccess,
   getBuyerSystemViewSettingsDocumentId,
@@ -40,8 +39,6 @@ const backups = [
 ];
 
 assert.deepEqual(sortBackupsNewestFirst(backups).map(item => item.id), ['new', 'middle', 'old']);
-assert.deepEqual(filterExpiredBackups(backups, 450, 250).expiredIds, ['old']);
-assert.deepEqual(filterExpiredBackups(backups, 450, 250).activeBackups.map(item => item.id), ['new', 'middle']);
 assert.equal(getLatestLedgerBackup(backups)?.id, 'new');
 assert.equal(getLatestLedgerBackup([]), null);
 assert.equal(isLedgerBackupNewerThanLoaded(getLatestLedgerBackup(backups), 299), true);

@@ -99,9 +99,17 @@ export async function setMongoDocument(req: ApiRequest, res: ApiResponse): Promi
   }
 
   const collection = await getMongoCollection<MongoRecord>(collectionName);
+  const docToWrite: Record<string, unknown> = { ...(value as Record<string, unknown>), _id: id };
+  // 把 ISO 字符串 createdAt 转成 BSON Date，便于 MongoDB TTL 索引识别
+  if (typeof docToWrite.createdAt === 'string') {
+    const parsed = new Date(docToWrite.createdAt);
+    if (!Number.isNaN(parsed.getTime())) {
+      docToWrite.createdAt = parsed;
+    }
+  }
   await collection.updateOne(
     { _id: id },
-    { $set: { ...(value as Record<string, unknown>), _id: id } },
+    { $set: docToWrite },
     { upsert: true },
   );
   return res.status(200).json({ success: true });

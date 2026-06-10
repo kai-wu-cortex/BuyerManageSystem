@@ -17,16 +17,13 @@ import {
   formatLedgerBackupSize,
   getCurrentCloudbaseUser,
   getBuyerSystemAccess,
-  filterExpiredBackups,
   getLatestLedgerBackup,
   handleCloudbaseError,
   isLedgerBackupNewerThanLoaded,
   isCloudbaseConfigured,
-  listActiveLedgerBackups,
   listDocuments,
   OperationType,
   prepareSampleForCloudbaseSync,
-  pruneExpiredLedgerBackups,
   replaceCollection,
   replaceRecordCollection,
   saveLedgerBackup,
@@ -327,8 +324,7 @@ export default function App() {
 
     void listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups)
       .then(records => {
-        const { activeBackups } = filterExpiredBackups(records);
-        setLatestRemoteLedgerBackup(getLatestLedgerBackup(activeBackups));
+        setLatestRemoteLedgerBackup(getLatestLedgerBackup(records));
       })
       .catch(error => {
         try {
@@ -555,11 +551,7 @@ export default function App() {
         }
         return current;
       });
-      try {
-        await pruneExpiredLedgerBackups();
-      } catch (cleanupErr) {
-        console.warn("Background ledger backup auto-cleanup failed:", cleanupErr);
-      }
+      // 历史备份的过期清理由 MongoDB TTL 索引 (createdAt) 自动处理
     } catch (error) {
       console.error("Failed to backup ledger to CloudBase:", error);
     }
@@ -747,9 +739,10 @@ export default function App() {
         setHistoryLoadError("请先在 .env.local 配置 VITE_CLOUDBASE_ENV_ID 后再读取云端备份。");
         return;
       }
-      const backups = await listActiveLedgerBackups();
-      setHistoryBackups(backups);
-      setLatestRemoteLedgerBackup(getLatestLedgerBackup(backups));
+      const backups = await listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups);
+      const sortedBackups = [...backups].sort((a, b) => b.rawTime - a.rawTime);
+      setHistoryBackups(sortedBackups);
+      setLatestRemoteLedgerBackup(getLatestLedgerBackup(sortedBackups));
     } catch (err) {
       console.error("Failed to list historical backups from CloudBase:", err);
       try {

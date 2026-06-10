@@ -76,6 +76,7 @@ export interface LedgerBackup {
   rawTime: number;
   size: number;
   orders: PurchaseOrder[];
+  createdAt?: string; // ISO 8601, 给 MongoDB TTL 索引使用
 }
 
 export type CollectionName =
@@ -86,7 +87,6 @@ export type CollectionName =
   | 'buyer_system_view_settings';
 
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
-const LEDGER_BACKUP_TTL_MS = 5 * 24 * 60 * 60 * 1000;
 
 const viteCloudbaseEnv: ViteCloudbaseEnv = {
   VITE_CLOUDBASE_ENV_ID:
@@ -446,6 +446,7 @@ export async function saveLedgerBackup(orders: PurchaseOrder[]): Promise<LedgerB
     rawTime,
     size: new Blob([JSON.stringify(orders)]).size,
     orders,
+    createdAt: now.toISOString(),
   };
 
   await setDocument('ledger_backups', id, backup);
@@ -475,41 +476,6 @@ export function formatLedgerBackupSize(size: number): string {
   }
 
   return `${(size / 1024).toFixed(1)} KB`;
-}
-
-export function filterExpiredBackups(
-  backups: LedgerBackup[],
-  nowMs = Date.now(),
-  ttlMs = LEDGER_BACKUP_TTL_MS,
-): { activeBackups: LedgerBackup[]; expiredIds: string[] } {
-  const activeBackups: LedgerBackup[] = [];
-  const expiredIds: string[] = [];
-
-  for (const backup of backups) {
-    if (backup.rawTime > 0 && nowMs - backup.rawTime > ttlMs) {
-      expiredIds.push(backup.id);
-    } else {
-      activeBackups.push(backup);
-    }
-  }
-
-  return {
-    activeBackups: sortBackupsNewestFirst(activeBackups),
-    expiredIds,
-  };
-}
-
-export async function pruneExpiredLedgerBackups(): Promise<void> {
-  const backups = await listDocuments<LedgerBackup>('ledger_backups');
-  const { expiredIds } = filterExpiredBackups(backups);
-  await runInChunks(expiredIds, id => deleteDocument('ledger_backups', id));
-}
-
-export async function listActiveLedgerBackups(): Promise<LedgerBackup[]> {
-  const backups = await listDocuments<LedgerBackup>('ledger_backups');
-  const { activeBackups, expiredIds } = filterExpiredBackups(backups);
-  await runInChunks(expiredIds, id => deleteDocument('ledger_backups', id));
-  return activeBackups;
 }
 
 export const cloudbaseCollections = {
