@@ -3,7 +3,6 @@ import { InventoryItem, PurchaseOrder, SampleRecord, StickyNote } from '../types
 
 type CloudbaseConfig = Parameters<typeof cloudbase.init>[0];
 type CloudbaseApp = ReturnType<typeof cloudbase.init>;
-type CloudbaseDatabase = ReturnType<CloudbaseApp['database']>;
 type CloudbaseAuth = ReturnType<CloudbaseApp['auth']>;
 
 type ViteCloudbaseEnv = {
@@ -14,14 +13,6 @@ type ViteCloudbaseEnv = {
 };
 
 type CloudbaseRecord = Record<string, unknown>;
-
-type WatchSnapshot = {
-  docs: CloudbaseRecord[];
-};
-
-type WatchListener = {
-  close: () => void;
-};
 
 export enum OperationType {
   CREATE = 'create',
@@ -121,9 +112,7 @@ const viteCloudbaseEnv: ViteCloudbaseEnv = {
 };
 
 let cloudbaseApp: CloudbaseApp | null = null;
-let cloudbaseDb: CloudbaseDatabase | null = null;
 let cloudbaseAuth: CloudbaseAuth | null = null;
-let cloudbaseAuthPromise: Promise<void> | null = null;
 
 function requiredCloudbaseEnvId(): string {
   const envId = getOptionalEnvValue('VITE_CLOUDBASE_ENV_ID');
@@ -169,44 +158,8 @@ function getCloudbaseAuth(): CloudbaseAuth {
   return cloudbaseAuth;
 }
 
-function getCloudbaseDb(): CloudbaseDatabase {
-  if (!cloudbaseDb) {
-    const database = getOptionalEnvValue('VITE_CLOUDBASE_DATABASE');
-    cloudbaseDb = database ? getCloudbaseApp().database({ database }) : getCloudbaseApp().database();
-  }
-  return cloudbaseDb;
-}
-
-async function ensureCloudbaseAuth(): Promise<void> {
-  if (!cloudbaseAuthPromise) {
-    cloudbaseAuthPromise = (async () => {
-      await getCurrentCloudbaseUser();
-    })().catch(error => {
-      cloudbaseAuthPromise = null;
-      throw error;
-    });
-  }
-
-  await cloudbaseAuthPromise;
-}
-
 function isCloudbaseRecord(value: unknown): value is CloudbaseRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function getCloudbaseDocumentId(value: CloudbaseRecord): string | null {
-  const id = value._id;
-  return typeof id === 'string' ? id : null;
-}
-
-function hasSdkError(result: { code?: string; message?: string }): boolean {
-  return Boolean(result.code);
-}
-
-function assertNoSdkError(result: { code?: string; message?: string }, path: string): void {
-  if (hasSdkError(result)) {
-    throw new Error(`${path}: ${result.message ?? result.code ?? 'CloudBase operation failed'}`);
-  }
 }
 
 export function normalizeCloudbaseDocumentId(id: string): string {
@@ -234,13 +187,17 @@ export function cleanUndefined<T>(value: T): T {
   return cleaned as T;
 }
 
-function stripCloudbaseSystemFields<T>(record: CloudbaseRecord): T {
-  const { _id, _openid, _createTime, _updateTime, ...businessFields } = record;
-  void _id;
-  void _openid;
-  void _createTime;
-  void _updateTime;
-  return businessFields as T;
+async function readJsonResponse<T>(response: Response, path: string): Promise<T> {
+  const payload = await response.json() as { success?: boolean; data?: T; message?: string; code?: string };
+  if (!response.ok || payload.success === false) {
+    throw new Error(`${path}: ${payload.message ?? payload.code ?? 'MongoDB API request failed'}`);
+  }
+  return payload.data as T;
+}
+
+function getDataApiPath(collectionName: CollectionName, documentId?: string): string {
+  const basePath = `/api/data/${encodeURIComponent(collectionName)}`;
+  return documentId ? `${basePath}/${encodeURIComponent(normalizeCloudbaseDocumentId(documentId))}` : basePath;
 }
 
 async function runInChunks<T>(
@@ -437,7 +394,6 @@ export async function signInToCloudbase(username: string, password: string): Pro
     throw new Error('CloudBase 登录成功但未返回有效用户会话。');
   }
 
-  cloudbaseAuthPromise = Promise.resolve();
   return user;
 }
 
@@ -476,7 +432,6 @@ export async function sendCloudbaseOtp(method: CloudbaseOtpMethod, rawTarget: st
         throw new Error('CloudBase 验证成功但未返回有效用户会话。');
       }
 
-      cloudbaseAuthPromise = Promise.resolve();
       return user;
     },
   };
@@ -488,70 +443,24 @@ export async function signOutFromCloudbase(): Promise<void> {
   }
 
   await getCloudbaseAuth().signOut();
-  cloudbaseAuthPromise = null;
-}
-
-export function watchCollection<T>(
-  collectionName: CollectionName,
-  onChange: (records: T[]) => void | Promise<void>,
-  onError: (error: unknown) => void,
-): () => void {
-  let isClosed = false;
-  let listener: WatchListener | null = null;
-
-  void (async () => {
-    await ensureCloudbaseAuth();
-    if (isClosed) return;
-
-    listener = getCloudbaseDb().collection(collectionName).watch({
-      onChange: (snapshot: WatchSnapshot) => {
-        const records = snapshot.docs
-          .filter(isCloudbaseRecord)
-          .map(record => stripCloudbaseSystemFields<T>(record));
-
-        Promise.resolve(onChange(records)).catch(onError);
-      },
-      onError,
-    }) as WatchListener;
-  })().catch(onError);
-
-  return () => {
-    isClosed = true;
-    listener?.close();
-  };
 }
 
 export async function listDocuments<T>(collectionName: CollectionName): Promise<T[]> {
-  await ensureCloudbaseAuth();
-  const result = await getCloudbaseDb().collection(collectionName).limit(1000).get();
-  assertNoSdkError(result, collectionName);
-  return result.data.filter(isCloudbaseRecord).map(record => stripCloudbaseSystemFields<T>(record));
+  const path = getDataApiPath(collectionName);
+  const response = await fetch(path);
+  return readJsonResponse<T[]>(response, collectionName);
 }
 
 export async function getDocument<T>(collectionName: CollectionName, documentId: string): Promise<T | null> {
-  await ensureCloudbaseAuth();
-  const id = normalizeCloudbaseDocumentId(documentId);
-  const result = await getCloudbaseDb().collection(collectionName).doc(id).get();
-  assertNoSdkError(result, `${collectionName}/${id}`);
-
-  const data = result.data;
-  if (Array.isArray(data)) {
-    const first = data.find(isCloudbaseRecord);
-    return first ? stripCloudbaseSystemFields<T>(first) : null;
-  }
-
-  if (isCloudbaseRecord(data)) {
-    return stripCloudbaseSystemFields<T>(data);
-  }
-
-  return null;
+  const path = getDataApiPath(collectionName, documentId);
+  const response = await fetch(path);
+  return readJsonResponse<T | null>(response, path);
 }
 
 async function listDocumentIds(collectionName: CollectionName): Promise<string[]> {
-  await ensureCloudbaseAuth();
-  const result = await getCloudbaseDb().collection(collectionName).limit(1000).get();
-  assertNoSdkError(result, collectionName);
-  return result.data.filter(isCloudbaseRecord).map(getCloudbaseDocumentId).filter((id): id is string => Boolean(id));
+  const path = `${getDataApiPath(collectionName)}?includeIds=true`;
+  const response = await fetch(path);
+  return readJsonResponse<string[]>(response, collectionName);
 }
 
 export async function setDocument<T extends object>(
@@ -559,17 +468,19 @@ export async function setDocument<T extends object>(
   documentId: string,
   value: T,
 ): Promise<void> {
-  await ensureCloudbaseAuth();
-  const id = normalizeCloudbaseDocumentId(documentId);
-  const result = await getCloudbaseDb().collection(collectionName).doc(id).set(cleanUndefined(value));
-  assertNoSdkError(result, `${collectionName}/${id}`);
+  const path = getDataApiPath(collectionName, documentId);
+  const response = await fetch(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cleanUndefined(value)),
+  });
+  await readJsonResponse<null>(response, path);
 }
 
 export async function deleteDocument(collectionName: CollectionName, documentId: string): Promise<void> {
-  await ensureCloudbaseAuth();
-  const id = normalizeCloudbaseDocumentId(documentId);
-  const result = await getCloudbaseDb().collection(collectionName).doc(id).remove();
-  assertNoSdkError(result, `${collectionName}/${id}`);
+  const path = getDataApiPath(collectionName, documentId);
+  const response = await fetch(path, { method: 'DELETE' });
+  await readJsonResponse<null>(response, path);
 }
 
 export async function upsertDocuments<T extends object>(

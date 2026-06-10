@@ -3,7 +3,9 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { parseSampleWithGemini } from "./src/lib/geminiSampleParser";
+import { handleMongoCollectionRequest, handleMongoDocumentRequest } from "./src/server/mongoDataApi";
 
+dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 const app = express();
@@ -24,6 +26,20 @@ app.post("/api/gemini/parse-sample", async (req, res) => {
     console.warn("Gemini Parsing warning in server-side:", payload.message);
   }
   return res.status(status).json(payload);
+});
+
+// MongoDB-backed data API
+app.get("/api/data/:collection", async (req, res) => {
+  await handleMongoCollectionRequest(req, res);
+});
+app.get("/api/data/:collection/:id", async (req, res) => {
+  await handleMongoDocumentRequest(req, res);
+});
+app.put("/api/data/:collection/:id", async (req, res) => {
+  await handleMongoDocumentRequest(req, res);
+});
+app.delete("/api/data/:collection/:id", async (req, res) => {
+  await handleMongoDocumentRequest(req, res);
 });
 
 async function startServer() {
