@@ -28,6 +28,13 @@ import {
   type CloudbaseAuthUser,
   type DashboardViewSettings,
 } from '../lib/cloudbaseData';
+import {
+  DEFAULT_ITEM_FIELDS,
+  ITEM_FIELD_LABELS,
+  formatItemFieldValue,
+  useStoredItemFields,
+  type ItemFieldKey,
+} from './PODetailDrawer';
 
 interface DashboardProps {
   purchaseOrders: PurchaseOrder[];
@@ -177,7 +184,9 @@ export default function Dashboard({
     const saved = localStorage.getItem('dashboard_drawer_fields');
     return saved ? JSON.parse(saved) : DEFAULT_DRAWER_FIELDS;
   })());
+  const [itemFields, setItemFields] = useStoredItemFields();
   const [showDrawerConfig, setShowDrawerConfig] = useState(false);
+  const activeItemFieldKeys = (Object.keys(ITEM_FIELD_LABELS) as ItemFieldKey[]).filter(key => itemFields[key]);
   
   useEffect(() => { localStorage.setItem('dashboard_timeline_cols', JSON.stringify(timelineCols)); }, [timelineCols]);
   useEffect(() => { localStorage.setItem('dashboard_visible_fields', JSON.stringify(visibleFields)); }, [visibleFields]);
@@ -1058,6 +1067,50 @@ export default function Dashboard({
                       </label>
                     </div>
                   </div>
+
+                  {/* 物料行字段配置（与采购单台账抽屉共享 localStorage） */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-slate-450 block font-mono">
+                        物料行展示字段 / ITEM FIELDS
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setItemFields({ ...DEFAULT_ITEM_FIELDS })}
+                          className="px-2 py-0.5 text-[9px] font-bold rounded border border-slate-200 text-slate-500 hover:bg-slate-50"
+                        >
+                          重置默认
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setItemFields(prev => {
+                              const next = { ...prev };
+                              for (const key of Object.keys(next) as ItemFieldKey[]) next[key] = true;
+                              return next;
+                            })
+                          }
+                          className="px-2 py-0.5 text-[9px] font-bold rounded border border-slate-200 text-slate-500 hover:bg-slate-50"
+                        >
+                          全选
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {(Object.keys(ITEM_FIELD_LABELS) as ItemFieldKey[]).map(key => (
+                        <label key={key} className="flex items-center gap-1.5 rounded cursor-pointer text-[11px] font-bold text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={itemFields[key]}
+                            onChange={event => setItemFields(prev => ({ ...prev, [key]: event.target.checked }))}
+                            className="w-3.5 h-3.5 text-[#2563EB] rounded border-slate-300 focus:ring-[#2563EB]"
+                          />
+                          {ITEM_FIELD_LABELS[key]}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1181,46 +1234,42 @@ export default function Dashboard({
                             </div>
                             
                             <div className={`grid gap-3 ${drawerCols === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                              {selectedPO.items.map((item, idx) => {
-                                const rowTotal = item.orderedQty * item.price;
-                                return (
-                                  <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                                    <div>
-                                      <div className="flex items-start justify-between gap-1 border-b border-slate-105 pb-2 mb-2">
-                                        <div className="min-w-0">
-                                          <span className="font-bold text-slate-800 text-xs block truncate" title={item.name}>
-                                            {item.name}
-                                          </span>
-                                          <span className="text-[10px] font-mono text-slate-400 block truncate" title={item.spec}>
-                                            规格: {item.spec}
-                                          </span>
-                                        </div>
-                                        <span className="text-[9px] bg-slate-100 text-slate-500 font-mono px-1.5 py-0.5 rounded font-bold shrink-0">
-                                          #{idx + 1}
+                              {selectedPO.items.map((item, idx) => (
+                                <div key={idx} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                                  <div>
+                                    <div className="flex items-start justify-between gap-1 border-b border-slate-105 pb-2 mb-2">
+                                      <div className="min-w-0">
+                                        <span className="font-bold text-slate-800 text-xs block truncate" title={item.name}>
+                                          {item.name}
+                                        </span>
+                                        <span className="text-[10px] font-mono text-slate-400 block truncate" title={item.spec}>
+                                          规格: {item.spec}
                                         </span>
                                       </div>
+                                      <span className="text-[9px] bg-slate-100 text-slate-500 font-mono px-1.5 py-0.5 rounded font-bold shrink-0">
+                                        #{idx + 1}
+                                      </span>
+                                    </div>
 
-                                      <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono text-slate-500 mb-2">
-                                        <div>
-                                          <span className="text-slate-400 block font-sans text-[9px]">采购单价</span>
-                                          <strong className="text-slate-700">¥{item.price.toFixed(2)}</strong>
-                                        </div>
-                                        <div className="text-right">
-                                          <span className="text-slate-400 block font-sans text-[9px]">采购数量</span>
-                                          <strong className="text-slate-700">
-                                            {item.orderedQty} <span className="font-sans text-slate-400 text-[9px]">{item.unit}</span>
-                                          </strong>
-                                        </div>
+                                    {activeItemFieldKeys.length === 0 ? (
+                                      <p className="text-[10px] text-slate-400 font-mono">在「显示与布局 → 物料行展示字段」勾选要显示的字段</p>
+                                    ) : (
+                                      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10px] font-mono text-slate-500">
+                                        {activeItemFieldKeys.map(key => {
+                                          const display = formatItemFieldValue(item, key);
+                                          if (display === null) return null;
+                                          return (
+                                            <div key={key} className="flex items-baseline justify-between gap-2 min-w-0">
+                                              <span className="text-slate-400 font-sans text-[9px] shrink-0">{ITEM_FIELD_LABELS[key]}</span>
+                                              <strong className="text-slate-700 truncate text-right" title={display}>{display}</strong>
+                                            </div>
+                                          );
+                                        })}
                                       </div>
-                                    </div>
-
-                                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-                                      <span className="text-slate-450 font-mono text-[9px]">小计 / SUBTOTAL:</span>
-                                      <strong className="font-mono text-slate-700">¥{rowTotal.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}</strong>
-                                    </div>
+                                    )}
                                   </div>
-                                );
-                              })}
+                                </div>
+                              ))}
                             </div>
                           </div>
                         )}
@@ -1309,14 +1358,32 @@ export default function Dashboard({
                               {drawerFields.items && po.items.length > 0 && (
                                 <div className="border border-slate-100 rounded-lg bg-slate-50/50 divide-y divide-slate-100 mb-2 overflow-hidden">
                                   {po.items.map((item, idx) => (
-                                    <div key={idx} className="flex justify-between items-center py-1.5 px-2 text-[10px]">
-                                      <div className="flex flex-col flex-1 min-w-0 pr-2">
-                                        <span className="font-semibold text-slate-700 truncate">{item.name}</span>
-                                        <span className="text-[9px] font-mono text-slate-400 truncate">{item.spec}</span>
+                                    <div key={idx} className="py-1.5 px-2 text-[10px]">
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div className="flex flex-col flex-1 min-w-0 pr-2">
+                                          <span className="font-semibold text-slate-700 truncate">{item.name}</span>
+                                          <span className="text-[9px] font-mono text-slate-400 truncate">{item.spec}</span>
+                                        </div>
+                                        <div className="font-bold text-slate-600 font-mono shrink-0">
+                                          {item.orderedQty} <span className="font-normal font-sans text-slate-400">{item.unit}</span>
+                                        </div>
                                       </div>
-                                      <div className="font-bold text-slate-600 font-mono shrink-0">
-                                        {item.orderedQty} <span className="font-normal font-sans text-slate-400">{item.unit}</span>
-                                      </div>
+                                      {activeItemFieldKeys.length > 0 && (
+                                        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1 text-[9px] font-mono text-slate-500">
+                                          {activeItemFieldKeys
+                                            .filter(key => key !== 'orderedQty')
+                                            .map(key => {
+                                              const display = formatItemFieldValue(item, key);
+                                              if (display === null) return null;
+                                              return (
+                                                <div key={key} className="flex items-baseline justify-between gap-2 min-w-0">
+                                                  <span className="text-slate-400 font-sans text-[9px] shrink-0">{ITEM_FIELD_LABELS[key]}</span>
+                                                  <strong className="text-slate-700 truncate text-right" title={display}>{display}</strong>
+                                                </div>
+                                              );
+                                            })}
+                                        </div>
+                                      )}
                                     </div>
                                   ))}
                                 </div>

@@ -13,7 +13,7 @@ const DEFAULT_DRAWER_FIELDS = {
 } as const;
 
 // 物料行可选展示字段 (key 对应 OrderItem 上的字段，或 'subtotal' 等计算值)
-type ItemFieldKey =
+export type ItemFieldKey =
   | 'price'
   | 'orderedQty'
   | 'basicQty'
@@ -37,7 +37,7 @@ type ItemFieldKey =
   | 'remark'
   | 'subtotal';
 
-const ITEM_FIELD_LABELS: Record<ItemFieldKey, string> = {
+export const ITEM_FIELD_LABELS: Record<ItemFieldKey, string> = {
   price: '采购单价',
   orderedQty: '采购数量',
   basicQty: '基本数量',
@@ -62,7 +62,7 @@ const ITEM_FIELD_LABELS: Record<ItemFieldKey, string> = {
   subtotal: '小计金额',
 };
 
-const DEFAULT_ITEM_FIELDS: Record<ItemFieldKey, boolean> = {
+export const DEFAULT_ITEM_FIELDS: Record<ItemFieldKey, boolean> = {
   price: true,
   orderedQty: true,
   executedQty: true,
@@ -87,8 +87,9 @@ const DEFAULT_ITEM_FIELDS: Record<ItemFieldKey, boolean> = {
   remark: false,
 };
 
+export type ItemFields = Record<ItemFieldKey, boolean>;
+
 type DrawerFields = Record<keyof typeof DEFAULT_DRAWER_FIELDS, boolean>;
-type ItemFields = Record<ItemFieldKey, boolean>;
 type DrawerCols = 1 | 2;
 
 const STORAGE_KEY_FIELDS = 'po_detail_drawer_fields';
@@ -111,7 +112,7 @@ function readStoredFields(): DrawerFields {
   }
 }
 
-function readStoredItemFields(): ItemFields {
+export function readStoredItemFields(): ItemFields {
   if (typeof window === 'undefined') return { ...DEFAULT_ITEM_FIELDS };
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY_ITEM_FIELDS);
@@ -125,6 +126,35 @@ function readStoredItemFields(): ItemFields {
   } catch {
     return { ...DEFAULT_ITEM_FIELDS };
   }
+}
+
+/** Hook 形式读取 + 监听 localStorage 变化（同一窗口 storage event 不触发，这里轮询 + 自定义事件） */
+export function useStoredItemFields(): [ItemFields, (next: ItemFields | ((prev: ItemFields) => ItemFields)) => void] {
+  const [value, setValue] = useState<ItemFields>(readStoredItemFields);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => setValue(readStoredItemFields());
+    window.addEventListener('po-detail-item-fields-changed', handler);
+    window.addEventListener('storage', handler);
+    return () => {
+      window.removeEventListener('po-detail-item-fields-changed', handler);
+      window.removeEventListener('storage', handler);
+    };
+  }, []);
+
+  const update = (next: ItemFields | ((prev: ItemFields) => ItemFields)) => {
+    setValue(prev => {
+      const resolved = typeof next === 'function' ? (next as (prev: ItemFields) => ItemFields)(prev) : next;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEY_ITEM_FIELDS, JSON.stringify(resolved));
+        window.dispatchEvent(new Event('po-detail-item-fields-changed'));
+      }
+      return resolved;
+    });
+  };
+
+  return [value, update];
 }
 
 function readStoredCols(): DrawerCols {
@@ -150,7 +180,7 @@ interface PODetailDrawerProps {
 
 export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jumpLabel }: PODetailDrawerProps) {
   const [drawerFields, setDrawerFields] = useState<DrawerFields>(readStoredFields);
-  const [itemFields, setItemFields] = useState<ItemFields>(readStoredItemFields);
+  const [itemFields, setItemFields] = useStoredItemFields();
   const [drawerCols, setDrawerCols] = useState<DrawerCols>(readStoredCols);
   const [showDrawerConfig, setShowDrawerConfig] = useState(false);
 
@@ -158,11 +188,6 @@ export default function PODetailDrawer({ open, po, onClose, onJumpToLedger, jump
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(STORAGE_KEY_FIELDS, JSON.stringify(drawerFields));
   }, [drawerFields]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(STORAGE_KEY_ITEM_FIELDS, JSON.stringify(itemFields));
-  }, [itemFields]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -351,7 +376,7 @@ interface PODetailBodyProps {
   itemFields: ItemFields;
 }
 
-function formatItemFieldValue(item: OrderItem, key: ItemFieldKey): string | null {
+export function formatItemFieldValue(item: OrderItem, key: ItemFieldKey): string | null {
   if (key === 'subtotal') {
     const value = item.orderedQty * item.price;
     return `¥${value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
