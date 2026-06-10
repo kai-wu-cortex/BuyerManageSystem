@@ -30,7 +30,6 @@ import {
   saveLedgerBackup,
   signInToCloudbase,
   signOutFromCloudbase,
-  upsertDocuments,
   type CloudbaseAuthUser,
   type LedgerBackup,
 } from './lib/cloudbaseData';
@@ -97,6 +96,101 @@ function writeStoredLedgerBackupTime(rawTime: number): void {
   if (Number.isFinite(rawTime) && rawTime > 0) {
     window.localStorage.setItem(LEDGER_LOADED_BACKUP_TIME_KEY, String(rawTime));
   }
+}
+
+export interface MergeStats {
+  added: number;     // 新增的订单数
+  updated: number;   // 已存在但内容有变化的订单数
+  retained: number;  // 旧台账里存在，新台账没出现的订单数（不会被删，仅保留）
+  unchanged: number; // 内容完全相同
+}
+
+/**
+ * 按订单编号 (id, 形如 CGDD-xxxxx) 合并新旧订单：
+ * - 新台账里有的订单：以新版本为准（覆盖）
+ * - 新台账里没有但旧台账里有的：保留旧的（不删）
+ * - 顺序保持「新台账中的顺序在前，旧台账独有的在后」
+ */
+export function mergePurchaseOrdersById(
+  previousOrders: PurchaseOrder[],
+  incomingOrders: PurchaseOrder[],
+): { merged: PurchaseOrder[]; stats: MergeStats } {
+  const previousMap = new Map(previousOrders.map(po => [po.id, po]));
+  const incomingIds = new Set(incomingOrders.map(po => po.id));
+
+  let added = 0;
+  let updated = 0;
+  let unchanged = 0;
+
+  const merged: PurchaseOrder[] = [];
+
+  for (const incoming of incomingOrders) {
+    const prev = previousMap.get(incoming.id);
+    if (!prev) {
+      added += 1;
+    } else if (JSON.stringify(prev) !== JSON.stringify(incoming)) {
+      updated += 1;
+    } else {
+      unchanged += 1;
+    }
+    merged.push(incoming);
+  }
+
+  // 旧的、但新台账中没出现的订单，保留追加
+  let retained = 0;
+  for (const prev of previousOrders) {
+    if (!incomingIds.has(prev.id)) {
+      merged.push(prev);
+      retained += 1;
+    }
+  }
+
+  return { merged, stats: { added, updated, retained, unchanged } };
+}
+
+export interface SampleMergeStats {
+  added: number;
+  updated: number;
+  retained: number;
+  unchanged: number;
+}
+
+/**
+ * 按 id (SMP-xxxxx) 合并样品记录：与订单同样的逻辑
+ */
+export function mergeSampleRecordsById(
+  previousSamples: SampleRecord[],
+  incomingSamples: SampleRecord[],
+): { merged: SampleRecord[]; stats: SampleMergeStats } {
+  const previousMap = new Map(previousSamples.map(s => [s.id, s]));
+  const incomingIds = new Set(incomingSamples.map(s => s.id));
+
+  let added = 0;
+  let updated = 0;
+  let unchanged = 0;
+  const merged: SampleRecord[] = [];
+
+  for (const incoming of incomingSamples) {
+    const prev = previousMap.get(incoming.id);
+    if (!prev) {
+      added += 1;
+    } else if (JSON.stringify(prev) !== JSON.stringify(incoming)) {
+      updated += 1;
+    } else {
+      unchanged += 1;
+    }
+    merged.push(incoming);
+  }
+
+  let retained = 0;
+  for (const prev of previousSamples) {
+    if (!incomingIds.has(prev.id)) {
+      merged.push(prev);
+      retained += 1;
+    }
+  }
+
+  return { merged, stats: { added, updated, retained, unchanged } };
 }
 
 export default function App() {
@@ -228,16 +322,8 @@ export default function App() {
     }
 
     void listDocuments<InventoryItem>(cloudbaseCollections.inventory)
-      .then(async records => {
-        if (records.length === 0) {
-          const savedInv = localStorage.getItem("inventory_stock");
-          if (!savedInv) return;
-          const parsed = JSON.parse(savedInv) as InventoryItem[];
-          setInventory(parsed);
-          await upsertDocuments(cloudbaseCollections.inventory, parsed, item => item.code);
-          return;
-        }
-
+      .then(records => {
+        // 云端就是数据源真相：空就是空。不再用旧 localStorage 反向覆盖云端
         setInventory(records);
       })
       .catch(error => {
@@ -249,45 +335,7 @@ export default function App() {
       });
 
     void listDocuments<SampleRecord>(cloudbaseCollections.samples)
-      .then(async records => {
-        if (records.length === 0) {
-          const savedSamples = localStorage.getItem("sample_records");
-          const parsedSamples: SampleRecord[] = savedSamples ? JSON.parse(savedSamples) as SampleRecord[] : [
-            {
-              id: "SMP-2026-0001",
-              name: "稀释剂改进样品",
-              spec: "102# 改性型",
-              category: "原材料",
-              supplier: "东莞市丰彩新材料有限公司",
-              requestDate: "2026-05-10",
-              status: "合格启用",
-              quantity: 2,
-              unit: "KG",
-              courierInfo: "顺丰速运: SF1428571428",
-              assignedTo: "李工",
-              notes: "粘度以及干燥速度符合打样标准，已经在3001批次试用。"
-            },
-            {
-              id: "SMP-2026-0002",
-              name: "高粘结粘合剂",
-              spec: "BHG-7501升级款",
-              category: "包装物",
-              supplier: "广东邦固化学科技有限公司",
-              requestDate: "2026-05-25",
-              status: "测试中",
-              quantity: 1,
-              unit: "KG",
-              courierInfo: "中通快递: ZT88992211",
-              assignedTo: "王工",
-              notes: "正在进行抗剥离强度测试，初步表现良好。"
-            }
-          ];
-          const preparedSamples = parsedSamples.map(prepareSampleForCloudbaseSync);
-          setSamples(preparedSamples);
-          await upsertDocuments(cloudbaseCollections.samples, preparedSamples, sample => sample.id);
-          return;
-        }
-
+      .then(records => {
         setSamples(records);
       })
       .catch(error => {
@@ -299,16 +347,7 @@ export default function App() {
       });
 
     void listDocuments<StickyNote>(cloudbaseCollections.notes)
-      .then(async records => {
-        if (records.length === 0) {
-          const savedNotes = localStorage.getItem("order_sticky_notes");
-          if (!savedNotes) return;
-          const parsed = JSON.parse(savedNotes) as Record<string, StickyNote>;
-          setNotes(parsed);
-          await replaceRecordCollection(cloudbaseCollections.notes, parsed, {});
-          return;
-        }
-
+      .then(records => {
         const liveNotes: Record<string, StickyNote> = {};
         records.forEach(record => {
           liveNotes[record.poId] = record;
@@ -710,12 +749,20 @@ export default function App() {
       }
 
       if (Array.isArray(parsedOrders) && parsedOrders.length > 0) {
-        // Complete replacement of orders
-        handleUpdateOrders(parsedOrders);
-        alert(`🎉 成功解析并加载本地台账，共配准了 ${parsedOrders.length} 笔订单！\n即将把当前新台账自动备份至云端 CloudBase 数据库...`);
-        
+        // 按订单编号 (CGDD-) 合并，保留旧台账独有订单及其星标，避免数据/星标丢失
+        const { merged, stats } = mergePurchaseOrdersById(purchaseOrders, parsedOrders);
+        handleUpdateOrders(merged);
+        alert(
+          `🎉 成功解析并合并本地台账：\n` +
+          `  • 新增 ${stats.added} 笔\n` +
+          `  • 更新 ${stats.updated} 笔\n` +
+          `  • 内容不变 ${stats.unchanged} 笔\n` +
+          `  • 旧台账独有（已保留）${stats.retained} 笔\n` +
+          `合并后共 ${merged.length} 笔，即将自动备份至云端。`,
+        );
+
         // Save to CloudBase as backup
-        await backupToCloudbase(parsedOrders);
+        await backupToCloudbase(merged);
         if (userAccess.mode === 'ledgerUploadOnly') {
           await loadHistoryBackups();
         }
@@ -768,7 +815,8 @@ export default function App() {
         parsedOrders = full?.orders;
       }
       if (Array.isArray(parsedOrders)) {
-        handleUpdateOrders(parsedOrders);
+        const { merged, stats } = mergePurchaseOrdersById(purchaseOrders, parsedOrders);
+        handleUpdateOrders(merged);
         markLedgerBackupLoaded(backup.rawTime);
         setLatestRemoteLedgerBackup(current => {
           if (current && current.rawTime >= backup.rawTime) {
@@ -778,7 +826,9 @@ export default function App() {
         });
 
         // Show success reminder via animated toast notice
-        setSuccessToast(`🎉 成功载入历史台账 [${backup.timeCreated}]，共 ${parsedOrders.length} 笔订单！`);
+        setSuccessToast(
+          `🎉 已合并历史台账 [${backup.timeCreated}]：新增 ${stats.added} / 更新 ${stats.updated} / 保留 ${stats.retained}，共 ${merged.length} 笔`,
+        );
 
         setIsHistoryModalOpen(false);
         // We do not call backupToCloudbase(parsedOrders) here to prevent duplicate backup entries in the cloud.
