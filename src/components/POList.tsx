@@ -31,6 +31,7 @@ import {
   type LedgerViewSettings,
 } from '../lib/cloudbaseData';
 import PODetailDrawer from './PODetailDrawer';
+import POCardView, { type CardViewMode } from './POCardView';
 
 interface POListProps {
   purchaseOrders: PurchaseOrder[];
@@ -391,6 +392,29 @@ export default function POList({
     () => (detailDrawerPOId ? purchaseOrders.find(po => po.id === detailDrawerPOId) ?? null : null),
     [detailDrawerPOId, purchaseOrders],
   );
+
+  // 视图模式: 表格 / PO 卡片 / 物料行卡片
+  const [viewMode, setViewMode] = useState<'table' | CardViewMode>(() => {
+    if (typeof window === 'undefined') return 'table';
+    const saved = window.localStorage.getItem('po_list_view_mode');
+    if (saved === 'table' || saved === 'po-card' || saved === 'item-card') return saved;
+    return 'table';
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('po_list_view_mode', viewMode);
+  }, [viewMode]);
+
+  // 卡片视图分组字段
+  const [cardGroupBy, setCardGroupBy] = useState<keyof FlatLedgerRow | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const saved = window.localStorage.getItem('po_list_card_group_by');
+    return (saved && saved !== '__none__') ? (saved as keyof FlatLedgerRow) : null;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('po_list_card_group_by', cardGroupBy ?? '__none__');
+  }, [cardGroupBy]);
 
   // Row Height State: 'compact' | 'medium' | 'relaxed' with persistence
   const [rowHeight, setRowHeight] = useState<'compact' | 'medium' | 'relaxed'>(() => {
@@ -1422,8 +1446,71 @@ export default function POList({
         </div>
       </div>
 
+      {/* 视图切换 + 分组（卡片视图专用） */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 shadow-sm">
+          {([
+            { id: 'table', label: '表格视图' },
+            { id: 'po-card', label: 'PO 卡片' },
+            { id: 'item-card', label: '物料行卡片' },
+          ] as { id: 'table' | CardViewMode; label: string }[]).map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setViewMode(item.id)}
+              className={`px-3 py-1.5 text-[11px] font-bold rounded-md transition-colors ${
+                viewMode === item.id ? 'bg-[#2563EB] text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {viewMode !== 'table' && (
+          <div className="flex items-center gap-2 text-[11px] font-bold text-slate-600">
+            <span className="text-slate-400 font-mono uppercase tracking-wider">分组依据</span>
+            <select
+              value={cardGroupBy ?? '__none__'}
+              onChange={event => {
+                const val = event.target.value;
+                setCardGroupBy(val === '__none__' ? null : (val as keyof FlatLedgerRow));
+              }}
+              className="bg-white border border-slate-200 rounded-md px-2 py-1 text-[11px] font-bold focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+            >
+              <option value="__none__">不分组</option>
+              <option value="supplier">供应商</option>
+              <option value="status">单据状态</option>
+              <option value="executionStatus">执行状态</option>
+              <option value="inboundStatus">入库状态</option>
+              <option value="category">商品类别</option>
+              <option value="date">下单日期</option>
+              <option value="deliveryDate">交货日期</option>
+              <option value="transportMethod">运输方式</option>
+              <option value="settlementType">结算方式</option>
+              <option value="customerName">客户名称</option>
+            </select>
+          </div>
+        )}
+      </div>
+
+      {viewMode !== 'table' ? (
+        <div className="bg-white border border-slate-200 rounded-xl shadow-md p-4">
+          <POCardView
+            mode={viewMode}
+            rows={sortedLedgerRows}
+            purchaseOrders={purchaseOrders}
+            starredIds={starredIds}
+            onToggleStar={toggleStar}
+            onCardClick={poId => setDetailDrawerPOId(poId)}
+            visibleFields={columnsList.filter(col => !hiddenFields.includes(col.field)).map(col => col.field)}
+            fieldNames={Object.fromEntries(columnsList.map(col => [col.field, col.name]))}
+            groupBy={cardGroupBy}
+          />
+        </div>
+      ) : (
       <div className="bg-white border border-slate-200 rounded-xl shadow-md overflow-hidden">
-        <div 
+        <div
           ref={scrollContainerRef}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
           className="overflow-auto max-w-full max-h-[640px]"
@@ -1637,6 +1724,7 @@ export default function POList({
           })()}
         </div>
       </div>
+      )}
 
       {/* Elegant Remark Detail Dialog */}
       <AnimatePresence>
