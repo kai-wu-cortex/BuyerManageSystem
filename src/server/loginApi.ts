@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { Request, Response } from 'express';
+import type { Response } from 'express';
 import { getMongoCollection } from '../lib/mongodb.ts';
 
-type ApiRequest = Pick<Request, 'method' | 'body'>;
+type ApiRequest = { method?: string; body?: unknown };
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
 
 interface SystemUserDoc {
