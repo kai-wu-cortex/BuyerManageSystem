@@ -3,7 +3,7 @@
   "outputDirectory": "dist",
   "functions": {
     "api/**/*.ts": {
-      "includeFiles": "src/lib/geminiSampleParser.ts"
+      "includeFiles": "src/**/*.ts"
     }
   },
   "rewrites": [

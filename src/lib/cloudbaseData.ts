@@ -34,6 +34,7 @@ export interface CloudbaseAuthUser {
   uid: string;
   username: string | null;
   email: string | null;
+  role?: 'caigou' | 'caiwu' | null;
 }
 
 export type BuyerSystemAccessMode = 'full' | 'ledgerUploadOnly' | 'none';
@@ -128,7 +129,41 @@ function getOptionalEnvValue(key: keyof ViteCloudbaseEnv): string | undefined {
 }
 
 export function isCloudbaseConfigured(): boolean {
-  return Boolean(getOptionalEnvValue('VITE_CLOUDBASE_ENV_ID'));
+  // 登录与业务数据现已迁出 CloudBase，直接返回 true 保持上层 UI 的"已就绪"判断兼容。
+  return true;
+}
+
+const AUTH_STORAGE_KEY = 'buyer_system_auth_user';
+
+function readStoredAuthUser(): CloudbaseAuthUser | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CloudbaseAuthUser | null;
+    if (!parsed || typeof parsed.uid !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAuthUser(user: CloudbaseAuthUser): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+  } catch {
+    // ignore storage errors (e.g. quota)
+  }
+}
+
+function clearStoredAuthUser(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 function getCloudbaseApp(): CloudbaseApp {
@@ -149,13 +184,6 @@ function getCloudbaseApp(): CloudbaseApp {
     cloudbaseApp = cloudbase.init(config);
   }
   return cloudbaseApp;
-}
-
-function getCloudbaseAuth(): CloudbaseAuth {
-  if (!cloudbaseAuth) {
-    cloudbaseAuth = getCloudbaseApp().auth({ persistence: 'local' });
-  }
-  return cloudbaseAuth;
 }
 
 function isCloudbaseRecord(value: unknown): value is CloudbaseRecord {
@@ -222,46 +250,10 @@ export function handleCloudbaseError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-function readStringField(source: Record<string, unknown>, field: string): string | null {
-  const value = source[field];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+function readStringField(_source: Record<string, unknown>, _field: string): string | null {
+  return null;
 }
-
-function readNestedStringField(source: Record<string, unknown>, objectField: string, nestedField: string): string | null {
-  const value = source[objectField];
-  if (!isCloudbaseRecord(value)) {
-    return null;
-  }
-
-  return readStringField(value, nestedField);
-}
-
-function getSessionUser(result: { data?: { session?: { user?: unknown }; user?: unknown }; error?: unknown }): CloudbaseAuthUser | null {
-  if (result.error) {
-    throw result.error;
-  }
-
-  const user = result.data?.session?.user ?? result.data?.user;
-  if (!isCloudbaseRecord(user)) {
-    return null;
-  }
-
-  const uid = readStringField(user, 'id') ?? readStringField(user, 'uid') ?? readStringField(user, '_id');
-  if (!uid) {
-    return null;
-  }
-
-  const isAnonymous = user.is_anonymous;
-  if (isAnonymous === true) {
-    return null;
-  }
-
-  return {
-    uid,
-    username: readStringField(user, 'username') ?? readNestedStringField(user, 'user_metadata', 'username'),
-    email: readStringField(user, 'email'),
-  };
-}
+void readStringField;
 
 export function normalizeCloudbaseUsername(username: string): string {
   return username.trim();
@@ -371,12 +363,7 @@ export function validateCloudbaseOtpCode(code: string): string | null {
 }
 
 export async function getCurrentCloudbaseUser(): Promise<CloudbaseAuthUser | null> {
-  if (!isCloudbaseConfigured()) {
-    return null;
-  }
-
-  const result = await getCloudbaseAuth().getSession();
-  return getSessionUser(result);
+  return readStoredAuthUser();
 }
 
 export async function signInToCloudbase(username: string, password: string): Promise<CloudbaseAuthUser> {
@@ -385,64 +372,47 @@ export async function signInToCloudbase(username: string, password: string): Pro
     throw new Error(validationError);
   }
 
-  const result = await getCloudbaseAuth().signInWithPassword({
-    username: normalizeCloudbaseUsername(username),
-    password,
-  });
-  const user = getSessionUser(result);
-  if (!user) {
-    throw new Error('CloudBase 登录成功但未返回有效用户会话。');
+  let response: Response;
+  try {
+    response = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: normalizeCloudbaseUsername(username),
+        password,
+      }),
+    });
+  } catch {
+    throw new Error('无法连接登录服务，请检查网络。');
   }
 
+  const payload = await response.json().catch(() => null) as
+    | { success?: boolean; message?: string; code?: string; data?: { uid: string; username: string; role?: 'caigou' | 'caiwu' | null } }
+    | null;
+
+  if (!response.ok || !payload?.success || !payload.data) {
+    throw new Error(payload?.message ?? '登录失败，请稍后重试。');
+  }
+
+  const user: CloudbaseAuthUser = {
+    uid: payload.data.uid,
+    username: payload.data.username,
+    email: null,
+    role: payload.data.role ?? null,
+  };
+
+  writeStoredAuthUser(user);
   return user;
 }
 
-export async function sendCloudbaseOtp(method: CloudbaseOtpMethod, rawTarget: string): Promise<CloudbaseOtpChallenge> {
-  const validationError = validateCloudbaseOtpTarget(method, rawTarget);
-  if (validationError) {
-    throw new Error(validationError);
-  }
-
-  const target = normalizeCloudbaseOtpTarget(method, rawTarget);
-  const result = method === 'phone'
-    ? await getCloudbaseAuth().signInWithOtp({ phone: target })
-    : await getCloudbaseAuth().signInWithOtp({ email: target });
-
-  if (result.error) {
-    throw result.error;
-  }
-
-  const verifyOtp = result.data.verifyOtp;
-  if (!verifyOtp) {
-    throw new Error('CloudBase 未返回验证码验证入口，请检查登录方式配置。');
-  }
-
-  return {
-    method,
-    target,
-    verify: async (code: string) => {
-      const codeValidationError = validateCloudbaseOtpCode(code);
-      if (codeValidationError) {
-        throw new Error(codeValidationError);
-      }
-
-      const signInResult = await verifyOtp({ token: code.trim() });
-      const user = getSessionUser(signInResult);
-      if (!user) {
-        throw new Error('CloudBase 验证成功但未返回有效用户会话。');
-      }
-
-      return user;
-    },
-  };
+export async function sendCloudbaseOtp(_method: CloudbaseOtpMethod, _rawTarget: string): Promise<CloudbaseOtpChallenge> {
+  void _method;
+  void _rawTarget;
+  throw new Error('当前系统已切换为账号密码登录，验证码登录已下线。');
 }
 
 export async function signOutFromCloudbase(): Promise<void> {
-  if (!isCloudbaseConfigured()) {
-    return;
-  }
-
-  await getCloudbaseAuth().signOut();
+  clearStoredAuthUser();
 }
 
 export async function listDocuments<T>(collectionName: CollectionName): Promise<T[]> {

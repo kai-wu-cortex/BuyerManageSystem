@@ -4,6 +4,7 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { parseSampleWithGemini } from "./src/lib/geminiSampleParser";
 import { handleMongoCollectionRequest, handleMongoDocumentRequest } from "./src/server/mongoDataApi";
+import { handleLoginRequest } from "./src/server/loginApi";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -40,6 +41,11 @@ app.put("/api/data/:collection/:id", async (req, res) => {
 });
 app.delete("/api/data/:collection/:id", async (req, res) => {
   await handleMongoDocumentRequest(req, res);
+});
+
+// Login API (MongoDB-backed)
+app.post("/api/login", async (req, res) => {
+  await handleLoginRequest(req, res);
 });
 
 async function startServer() {
