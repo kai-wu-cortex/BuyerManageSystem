@@ -40,6 +40,59 @@ function getQueryFlag(req: ApiRequest, name: string): boolean {
   return false;
 }
 
+function parseProjection(req: ApiRequest): Record<string, 1 | 0> | undefined {
+  const raw = req.query?.fields;
+  const value = typeof raw === 'string' ? raw : Array.isArray(raw) && typeof raw[0] === 'string' ? raw[0] : null;
+  if (!value) return undefined;
+  const projection: Record<string, 1 | 0> = {};
+  for (const part of value.split(',')) {
+    const trimmed = part.trim();
+    if (trimmed) projection[trimmed] = 1;
+  }
+  return Object.keys(projection).length ? projection : undefined;
+}
+
+function buildPipeline(req: ApiRequest, includeIds: boolean): Document[] {
+  if (includeIds) {
+    return [{ $project: { _id: 1 } }, { $limit: 1000 }];
+  }
+
+  const stages: Document[] = [];
+  const sizeFields = req.query?.sizeFields;
+  const sizeFieldsValue = typeof sizeFields === 'string'
+    ? sizeFields
+    : Array.isArray(sizeFields) && typeof sizeFields[0] === 'string' ? sizeFields[0] : null;
+
+  if (sizeFieldsValue) {
+    const projection: Document = {};
+    for (const part of sizeFieldsValue.split(',')) {
+      const trimmed = part.trim();
+      if (trimmed) {
+        // 对数组字段返回长度而非内容，最大幅度压缩响应体
+        projection[`${trimmed}Count`] = { $size: { $ifNull: [`$${trimmed}`, []] } };
+      }
+    }
+    if (Object.keys(projection).length) {
+      // 保留其他字段，剔除原数组
+      stages.push({ $addFields: projection });
+      for (const part of sizeFieldsValue.split(',')) {
+        const trimmed = part.trim();
+        if (trimmed) {
+          stages.push({ $project: { [trimmed]: 0 } });
+        }
+      }
+    }
+  }
+
+  const projection = parseProjection(req);
+  if (projection) {
+    stages.push({ $project: projection });
+  }
+
+  stages.push({ $limit: 1000 });
+  return stages;
+}
+
 function stripMongoId<T>(record: MongoRecord): T {
   const { _id, ...rest } = record;
   void _id;
@@ -62,12 +115,19 @@ export async function listMongoDocuments(req: ApiRequest, res: ApiResponse): Pro
   }
 
   const collection = await getMongoCollection<MongoRecord>(collectionName);
-  if (getQueryFlag(req, 'includeIds')) {
+  const includeIds = getQueryFlag(req, 'includeIds');
+  if (includeIds) {
     const idDocs = await collection.find({}, { projection: { _id: 1 } }).limit(1000).toArray();
     return res.status(200).json({ success: true, data: idDocs.map(record => record._id) });
   }
-  const records = await collection.find({}).limit(1000).toArray();
-  return res.status(200).json({ success: true, data: records.map(stripMongoId) });
+
+  const pipeline = buildPipeline(req, false);
+  // 仅当请求方真的指定了 projection / sizeFields 才走聚合管道，否则维持原全量 find
+  const usingPipeline = pipeline.length > 1;
+  const records = usingPipeline
+    ? await collection.aggregate(pipeline).toArray()
+    : await collection.find({}).limit(1000).toArray();
+  return res.status(200).json({ success: true, data: records.map(record => stripMongoId(record as MongoRecord)) });
 }
 
 export async function getMongoDocument(req: ApiRequest, res: ApiResponse): Promise<unknown> {

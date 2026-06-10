@@ -17,6 +17,7 @@ import {
   formatLedgerBackupSize,
   getCurrentCloudbaseUser,
   getBuyerSystemAccess,
+  getDocument,
   getLatestLedgerBackup,
   handleCloudbaseError,
   isLedgerBackupNewerThanLoaded,
@@ -322,7 +323,7 @@ export default function App() {
         }
       });
 
-    void listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups)
+    void listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups, { sizeFields: ['orders'] })
       .then(records => {
         setLatestRemoteLedgerBackup(getLatestLedgerBackup(records));
       })
@@ -739,7 +740,7 @@ export default function App() {
         setHistoryLoadError("请先在 .env.local 配置 VITE_CLOUDBASE_ENV_ID 后再读取云端备份。");
         return;
       }
-      const backups = await listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups);
+      const backups = await listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups, { sizeFields: ['orders'] });
       const sortedBackups = [...backups].sort((a, b) => b.rawTime - a.rawTime);
       setHistoryBackups(sortedBackups);
       setLatestRemoteLedgerBackup(getLatestLedgerBackup(sortedBackups));
@@ -760,7 +761,12 @@ export default function App() {
   const handleSelectHistoryBackup = async (backup: typeof historyBackups[0]) => {
     setIsUploading(true);
     try {
-      const parsedOrders = backup.orders;
+      // 摘要列表只带 ordersCount，没有 orders，这里按需拉完整文档
+      let parsedOrders: PurchaseOrder[] | undefined = backup.orders;
+      if (!Array.isArray(parsedOrders)) {
+        const full = await getDocument<LedgerBackup>(cloudbaseCollections.ledgerBackups, backup.id);
+        parsedOrders = full?.orders;
+      }
       if (Array.isArray(parsedOrders)) {
         handleUpdateOrders(parsedOrders);
         markLedgerBackupLoaded(backup.rawTime);
@@ -770,10 +776,10 @@ export default function App() {
           }
           return backup;
         });
-        
+
         // Show success reminder via animated toast notice
         setSuccessToast(`🎉 成功载入历史台账 [${backup.timeCreated}]，共 ${parsedOrders.length} 笔订单！`);
-        
+
         setIsHistoryModalOpen(false);
         // We do not call backupToCloudbase(parsedOrders) here to prevent duplicate backup entries in the cloud.
       } else {
@@ -956,7 +962,7 @@ export default function App() {
                           <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">
                             {formatLedgerBackupSize(backup.size)}
                           </span>
-                          <span className="text-[10px] font-bold text-slate-400">{backup.orders.length} 笔订单</span>
+                          <span className="text-[10px] font-bold text-slate-400">{backup.ordersCount ?? backup.orders?.length ?? 0} 笔订单</span>
                         </div>
                       </div>
                     ))}

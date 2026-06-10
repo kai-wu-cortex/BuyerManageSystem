@@ -77,6 +77,8 @@ export interface LedgerBackup {
   size: number;
   orders: PurchaseOrder[];
   createdAt?: string; // ISO 8601, 给 MongoDB TTL 索引使用
+  /** 摘要模式 (listDocuments 带 sizeFields: ['orders']) 下返回，orders 不传，仅用于列表展示 */
+  ordersCount?: number;
 }
 
 export type CollectionName =
@@ -306,8 +308,22 @@ export async function signOutFromCloudbase(): Promise<void> {
   clearStoredAuthUser();
 }
 
-export async function listDocuments<T>(collectionName: CollectionName): Promise<T[]> {
-  const path = getDataApiPath(collectionName);
+export interface ListDocumentsOptions {
+  /** 仅返回这些字段（projection） */
+  fields?: string[];
+  /** 把数组字段在服务端转成 `${field}Count`，并去掉原数组——避免传输巨大 orders 数组 */
+  sizeFields?: string[];
+}
+
+export async function listDocuments<T>(collectionName: CollectionName, options?: ListDocumentsOptions): Promise<T[]> {
+  const url = new URL(getDataApiPath(collectionName), typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
+  if (options?.fields?.length) {
+    url.searchParams.set('fields', options.fields.join(','));
+  }
+  if (options?.sizeFields?.length) {
+    url.searchParams.set('sizeFields', options.sizeFields.join(','));
+  }
+  const path = url.pathname + (url.search ? url.search : '');
   const response = await fetch(path);
   return readJsonResponse<T[]>(response, collectionName);
 }

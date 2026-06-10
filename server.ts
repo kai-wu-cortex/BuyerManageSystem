@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
@@ -12,6 +13,8 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT ?? 3000);
 
+// gzip JSON 响应——MongoDB ledger_backups 等大体积响应能压缩 5-10 倍
+app.use(compression());
 // Large limits to handle pasted base64 screenshot images
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));

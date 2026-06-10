@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { PurchaseOrder, Comment, StickyNoteItem, StickyNote } from '../types';
-import { 
+import { useStarredPOs } from '../lib/hooks';
+import {
   Pin, 
   Paperclip, 
   Send, 
@@ -48,6 +49,7 @@ export default function SkeuomorphicNotes({
   const [selectedPOId, setSelectedPOId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'hasNotes' | 'starred'>('all');
+  const { starredIds } = useStarredPOs();
   
   // Multiple notes active editing tracking
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -177,17 +179,7 @@ export default function SkeuomorphicNotes({
       return hasNoteContent(po.id);
     }
     if (filterMode === 'starred') {
-      // Fetch starred state from localStorage safely matching hook behavior
-      const savedStars = localStorage.getItem('starred_purchase_orders');
-      if (savedStars) {
-        try {
-          const parsed = JSON.parse(savedStars);
-          return Array.isArray(parsed) && parsed.includes(po.id);
-        } catch {
-          return false;
-        }
-      }
-      return false;
+      return starredIds.has(po.id);
     }
     return true;
   });
