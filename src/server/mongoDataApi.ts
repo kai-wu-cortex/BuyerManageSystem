@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import type { Document } from 'mongodb';
-import { getMongoCollection } from '../lib/mongodb';
+import { getMongoCollection } from '../lib/mongodb.ts';
 
 const ALLOWED_COLLECTIONS = new Set([
   'inventory_stock',

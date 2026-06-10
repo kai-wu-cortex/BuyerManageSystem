@@ -1,3 +1,3 @@
-import { handleLoginRequest } from '../src/server/loginApi';
+import { handleLoginRequest } from "../src/server/loginApi.ts";
 
 export default handleLoginRequest;

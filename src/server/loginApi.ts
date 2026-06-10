@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
-import { getMongoCollection } from '../lib/mongodb';
+import { getMongoCollection } from '../lib/mongodb.ts';
 
 type ApiRequest = Pick<Request, 'method' | 'body'>;
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
