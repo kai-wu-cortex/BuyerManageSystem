@@ -200,6 +200,19 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const userAccess = getBuyerSystemAccess(authUser);
+
+  // ref：跟踪云端初始数据是否已加载完，避免「用户改了 → 云端拉回又覆盖回去」
+  const cloudDataInitializedRef = useRef({
+    inventory: false,
+    samples: false,
+    notes: false,
+  });
+  // ref：跟踪本地是否有未与云端同步的修改（写入云端期间也算 dirty）
+  const localDirtyRef = useRef({
+    inventory: false,
+    samples: false,
+    notes: false,
+  });
   
   // Navigation tabs: 'dashboard' | 'ledger' | 'inventory' | 'notes'
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
@@ -323,8 +336,19 @@ export default function App() {
 
     void listDocuments<InventoryItem>(cloudbaseCollections.inventory)
       .then(records => {
-        // 云端就是数据源真相：空就是空。不再用旧 localStorage 反向覆盖云端
-        setInventory(records);
+        // 云端拉回时如果本地已有用户修改，按 code 合并：本地为主，云端仅补充本地没有的
+        setInventory(current => {
+          if (localDirtyRef.current.inventory && current.length > 0) {
+            const localCodes = new Set(current.map(item => item.code));
+            const merged = [...current];
+            for (const cloud of records) {
+              if (!localCodes.has(cloud.code)) merged.push(cloud);
+            }
+            return merged;
+          }
+          return records;
+        });
+        cloudDataInitializedRef.current.inventory = true;
       })
       .catch(error => {
         try {
@@ -336,7 +360,18 @@ export default function App() {
 
     void listDocuments<SampleRecord>(cloudbaseCollections.samples)
       .then(records => {
-        setSamples(records);
+        setSamples(current => {
+          if (localDirtyRef.current.samples && current.length > 0) {
+            const localIds = new Set(current.map(item => item.id));
+            const merged = [...current];
+            for (const cloud of records) {
+              if (!localIds.has(cloud.id)) merged.push(cloud);
+            }
+            return merged;
+          }
+          return records;
+        });
+        cloudDataInitializedRef.current.samples = true;
       })
       .catch(error => {
         try {
@@ -352,7 +387,19 @@ export default function App() {
         records.forEach(record => {
           liveNotes[record.poId] = record;
         });
-        setNotes(liveNotes);
+        setNotes(current => {
+          if (localDirtyRef.current.notes && Object.keys(current).length > 0) {
+            // 合并：本地修改为主，云端独有的 poId 补充进来
+            const merged: Record<string, StickyNote> = { ...liveNotes };
+            for (const poId of Object.keys(current)) {
+              const note = current[poId];
+              if (note) merged[poId] = note; // 本地覆盖
+            }
+            return merged;
+          }
+          return liveNotes;
+        });
+        cloudDataInitializedRef.current.notes = true;
       })
       .catch(error => {
         try {
@@ -391,9 +438,16 @@ export default function App() {
 
   const handleUpdateInventory = async (updatedInventory: InventoryItem[]) => {
     try {
+      // 标 dirty：如果云端拉回响应还在飞，它不会覆盖本地修改
+      localDirtyRef.current.inventory = true;
       setInventory(updatedInventory);
       localStorage.setItem("inventory_stock", JSON.stringify(updatedInventory));
       if (!isCloudbaseConfigured()) {
+        return;
+      }
+      // 云端初始化前先别 replaceCollection，避免把云端真实数据用本地空集合覆盖
+      if (!cloudDataInitializedRef.current.inventory) {
+        console.warn('Inventory: 云端尚未初始化，写入延后');
         return;
       }
       await replaceCollection(cloudbaseCollections.inventory, updatedInventory, inventory, item => item.code);
@@ -404,10 +458,15 @@ export default function App() {
 
   const handleUpdateSamples = async (updatedSamples: SampleRecord[]) => {
     try {
+      localDirtyRef.current.samples = true;
       const preparedSamples = updatedSamples.map(prepareSampleForCloudbaseSync);
       setSamples(preparedSamples);
       localStorage.setItem("sample_records", JSON.stringify(preparedSamples));
       if (!isCloudbaseConfigured()) {
+        return;
+      }
+      if (!cloudDataInitializedRef.current.samples) {
+        console.warn('Samples: 云端尚未初始化，写入延后');
         return;
       }
       await replaceCollection(cloudbaseCollections.samples, preparedSamples, samples, sample => sample.id);
@@ -418,9 +477,14 @@ export default function App() {
 
   const handleUpdateNotes = async (updatedNotes: Record<string, StickyNote>) => {
     try {
+      localDirtyRef.current.notes = true;
       setNotes(updatedNotes);
       localStorage.setItem("order_sticky_notes", JSON.stringify(updatedNotes));
       if (!isCloudbaseConfigured()) {
+        return;
+      }
+      if (!cloudDataInitializedRef.current.notes) {
+        console.warn('Notes: 云端尚未初始化，写入延后');
         return;
       }
       await replaceRecordCollection(cloudbaseCollections.notes, updatedNotes, notes);
