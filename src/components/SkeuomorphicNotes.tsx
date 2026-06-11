@@ -146,14 +146,22 @@ export default function SkeuomorphicNotes({
     if (activePOId) {
       setSelectedPOId(activePOId);
     } else if (purchaseOrders.length > 0 && !selectedPOId) {
-      setSelectedPOId(purchaseOrders[0].id);
+      // 仅在桌面端 (lg+) 自动选中第一条；手机/平板端保持未选状态，先显示订单列表
+      if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+        setSelectedPOId(purchaseOrders[0].id);
+      }
     }
   }, [activePOId, purchaseOrders]);
 
   // Handle fallback if selected PO is deleted
   useEffect(() => {
     if (selectedPOId && !purchaseOrders.some(po => po.id === selectedPOId) && purchaseOrders.length > 0) {
-      setSelectedPOId(purchaseOrders[0].id);
+      // 同样仅在桌面端自动回退到第一条
+      if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+        setSelectedPOId(purchaseOrders[0].id);
+      } else {
+        setSelectedPOId('');
+      }
     }
   }, [purchaseOrders, selectedPOId]);
 
@@ -454,9 +462,11 @@ export default function SkeuomorphicNotes({
 
   return (
     <div className="h-full flex flex-col lg:flex-row gap-6">
-      
-      {/* 1. LEFT SIDEBAR PANEL: PO SELECTION & STATUS FILTER LIST */}
-      <div className="w-full lg:w-80 shrink-0 bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col h-full overflow-hidden">
+
+      {/* 1. LEFT SIDEBAR PANEL: PO SELECTION & STATUS FILTER LIST
+          手机/平板：只有未选 PO 时显示；选中 PO 后只显示右侧编辑面板。
+          lg+：左右并列。 */}
+      <div className={`${selectedPOId ? 'hidden lg:flex' : 'flex'} w-full lg:w-80 shrink-0 bg-white border border-slate-200 rounded-xl shadow-xs flex-col h-full overflow-hidden`}>
         
         {/* Panel Search & Header */}
         <div className="p-4 border-b border-slate-100 space-y-3 bg-slate-50/50">
@@ -577,8 +587,20 @@ export default function SkeuomorphicNotes({
         </div>
       </div>
 
-      {/* 2. RIGHT PANEL: BEAUTIFUL IMMERSIVE CORK/DRAFTING CANVAS */}
-      <div className="flex-1 bg-slate-100 rounded-2xl border border-slate-200 p-6 md:p-8 relative shadow-inner flex flex-col overflow-y-auto h-full min-h-[450px] lg:sticky lg:top-0 lg:self-start lg:max-h-[calc(100vh-140px)] [background-image:radial-gradient(#CBD5E1_1.2px,transparent_1.2px)] [background-size:24px_24px]">
+      {/* 2. RIGHT PANEL: BEAUTIFUL IMMERSIVE CORK/DRAFTING CANVAS
+          手机/平板：仅在选中 PO 时显示。 */}
+      <div className={`${selectedPOId ? 'flex' : 'hidden lg:flex'} flex-1 bg-slate-100 rounded-2xl border border-slate-200 p-4 md:p-6 lg:p-8 relative shadow-inner flex-col overflow-y-auto h-full min-h-[450px] lg:sticky lg:top-0 lg:self-start lg:max-h-[calc(100vh-140px)] [background-image:radial-gradient(#CBD5E1_1.2px,transparent_1.2px)] [background-size:24px_24px]`}>
+
+        {/* 手机/平板顶部返回按钮 */}
+        {selectedPOId && (
+          <button
+            type="button"
+            onClick={() => setSelectedPOId('')}
+            className="lg:hidden mb-3 self-start flex items-center gap-1.5 text-[11px] font-bold text-blue-600 bg-white border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            ← 返回订单列表
+          </button>
+        )}
         
         {/* Canvas floating contextual pins and status info */}
         <div className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center bg-white/70 backdrop-blur-xs px-4 py-3 rounded-xl border border-slate-200/50 gap-4">

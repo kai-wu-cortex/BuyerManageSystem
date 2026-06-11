@@ -1156,20 +1156,17 @@ export default function App() {
           <div className="p-6 border-b border-slate-800 bg-[#0b1120] flex items-center justify-between gap-1 overflow-hidden h-24 shrink-0 lg:rounded-t-2xl">
             <div className={`flex flex-col gap-1 ${isSidebarMinimized ? 'items-center w-full' : ''}`}>
               <div className="flex items-center gap-2">
-                <span className="w-3 h-3 shrink-0 rounded-full bg-[#2563EB] ring-4 ring-[#2563EB]/30 animate-pulse"></span>
+                <img src="/logo.png" alt="logo" className="w-7 h-7 shrink-0 object-contain" />
                 {!isSidebarMinimized && (
-                  <h1 className="text-xl font-bold tracking-tight text-white uppercase font-sans whitespace-nowrap">
-                    NovaSpark
+                  <h1 className="text-lg font-bold tracking-tight text-white font-sans whitespace-nowrap">
+                    采购管理系统
                   </h1>
                 )}
               </div>
               {!isSidebarMinimized && (
-                <>
-                  <p className="text-[10px] text-slate-400 font-semibold italic whitespace-nowrap">点燃你的创意</p>
-                  <div className="text-[10px] text-slate-400 mt-1 uppercase font-semibold whitespace-nowrap">
-                    采购追踪专业版 v4.2
-                  </div>
-                </>
+                <div className="text-[10px] text-slate-400 mt-1 uppercase font-semibold whitespace-nowrap">
+                  Procurement v4.2
+                </div>
               )}
             </div>
             
@@ -1318,10 +1315,18 @@ export default function App() {
                 )}
               </div>
               <div className="flex flex-col items-end">
-                <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">缺料预警 / ALERTS</span>
-                <span className={`font-mono text-sm md:text-base font-bold ${inventory.filter(item => item.currentStock < item.safetyStock).length > 0 ? 'text-[#EF4444] animate-pulse font-extrabold' : 'text-[#22C55E]'}`}>
-                  {inventory.filter(item => item.currentStock < item.safetyStock).length} SKUs CRITICAL
-                </span>
+                <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">延期预警 / OVERDUE</span>
+                {(() => {
+                  const overdueCount = purchaseOrders.filter(po => {
+                    if (po.inboundStatus === '全部入库') return false;
+                    return new Date(po.deliveryDate).getTime() < new Date().getTime();
+                  }).length;
+                  return (
+                    <span className={`font-mono text-sm md:text-base font-bold ${overdueCount > 0 ? 'text-[#EF4444] animate-pulse font-extrabold' : 'text-[#22C55E]'}`}>
+                      {overdueCount} 单延期
+                    </span>
+                  );
+                })()}
               </div>
               <div className="h-8 w-px bg-slate-200"></div>
               <div className="flex flex-col items-end">
@@ -1421,6 +1426,19 @@ export default function App() {
         </div>
 
       </div>
+
+      {/* 全屏加载遮罩：上传/载入台账时显示，防重复点击 */}
+      {isUploading && (
+        <div className="fixed inset-0 z-[9998] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-4 max-w-sm mx-4">
+            <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
+            <div className="text-center">
+              <p className="text-sm font-bold text-slate-800">正在加载台账</p>
+              <p className="text-xs text-slate-500 mt-1">请稍候，正在解析订单数据并合并到本地…</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Historical Ledgers Popup Modal Dialog */}
       {isHistoryModalOpen && (
