@@ -10,6 +10,7 @@ import SampleTracker from './components/SampleTracker';
 import SkeuomorphicNotes from './components/SkeuomorphicNotes';
 import SystemLogin from './components/SystemLogin';
 import NoteboardCanvas from './components/NoteboardCanvas';
+import SupplierSummaryApp from './components/SupplierSummaryApp';
 import { useStarredPOs } from './lib/hooks';
 import {
   clearCloudbaseCollections,
@@ -38,6 +39,7 @@ import {
   BookOpen,
   Layers,
   LayoutGrid,
+  Briefcase,
   ShieldCheck,
   Menu,
   X,
@@ -52,7 +54,7 @@ import {
   LogOut,
 } from 'lucide-react';
 
-type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes' | 'noteboard';
+type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes' | 'noteboard' | 'supplier-summary';
 type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
 const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
@@ -64,6 +66,7 @@ const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
 
 const miniAppTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
   { id: 'noteboard', label: '便签画板', icon: <LayoutGrid className="w-5 h-5 shrink-0" /> },
+  { id: 'supplier-summary', label: '供应商汇总', icon: <Briefcase className="w-5 h-5 shrink-0" /> },
 ];
 
 function getErrorMessage(error: unknown): string {
@@ -1278,7 +1281,7 @@ export default function App() {
               </button>
               <div className="flex flex-col gap-1.5">
                 <h2 className="text-lg font-bold tracking-tight text-slate-800">
-                  {activeTab === 'noteboard' ? '便签画板 / NOTEBOARD' : purchaseOrders.length === 0 ? '系统初始配准与数据流验证' : (
+                  {activeTab === 'noteboard' ? '便签画板 / NOTEBOARD' : activeTab === 'supplier-summary' ? '供应商汇总 / SUPPLIER SUMMARY' : purchaseOrders.length === 0 ? '系统初始配准与数据流验证' : (
                     <>
                       {activeTab === 'dashboard' && '采购分析与库存态势大屏'}
                       {activeTab === 'ledger' && '采购合规与期账审计台账'}
@@ -1382,6 +1385,8 @@ export default function App() {
           <main ref={mainScrollRef} className="flex-1 p-6 md:p-8 overflow-y-auto bg-[#F8FAFC]">
             {activeTab === 'noteboard' ? (
               <NoteboardCanvas authUser={authUser} />
+            ) : activeTab === 'supplier-summary' ? (
+              <SupplierSummaryApp purchaseOrders={purchaseOrders} />
             ) : purchaseOrders.length === 0 ? (
               <POList
                 purchaseOrders={purchaseOrders}
