@@ -443,7 +443,7 @@ export default function POList({
     if (saved && validFields.includes(saved)) {
       return saved as keyof FlatLedgerRow;
     }
-    return 'date';
+    return 'id';
   });
 
   const [sheetSortOrder, setSheetSortOrder] = useState<'asc' | 'desc'>(() => {
