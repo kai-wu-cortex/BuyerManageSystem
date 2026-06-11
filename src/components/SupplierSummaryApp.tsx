@@ -135,17 +135,22 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
   const allSummaries = useMemo(() => aggregateSuppliers(purchaseOrders), [purchaseOrders]);
 
   const filteredSummaries = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
+    const normalize = (value: unknown): string => {
+      if (value === null || value === undefined) return '';
+      return String(value).toLowerCase().replace(/\s+/g, '');
+    };
+    const term = normalize(searchTerm);
     const filtered = !term
       ? allSummaries
-      : allSummaries.filter(s =>
-          s.name.toLowerCase().includes(term) ||
-          s.materials.some(m =>
-            m.name.toLowerCase().includes(term) ||
-            m.code.toLowerCase().includes(term) ||
-            m.spec.toLowerCase().includes(term),
-          ),
-        );
+      : allSummaries.filter(s => {
+          if (normalize(s.name).includes(term)) return true;
+          return s.materials.some(m =>
+            normalize(m.name).includes(term) ||
+            normalize(m.code).includes(term) ||
+            normalize(m.spec).includes(term) ||
+            normalize(m.unit).includes(term),
+          );
+        });
 
     return [...filtered].sort((a, b) => {
       switch (sortField) {
@@ -173,6 +178,12 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
 
   const expandAll = () => setExpandedSuppliers(new Set(filteredSummaries.map(s => s.name)));
   const collapseAll = () => setExpandedSuppliers(new Set());
+
+  // 当搜索词非空时，自动展开所有匹配到的供应商，方便用户直接看到物料明细
+  const effectiveExpandedSuppliers = useMemo(() => {
+    if (!searchTerm.trim()) return expandedSuppliers;
+    return new Set(filteredSummaries.map(s => s.name));
+  }, [searchTerm, expandedSuppliers, filteredSummaries]);
 
   const totals = useMemo(() => {
     return filteredSummaries.reduce(
@@ -257,7 +268,7 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
           </div>
         ) : (
           filteredSummaries.map(summary => {
-            const expanded = expandedSuppliers.has(summary.name);
+            const expanded = effectiveExpandedSuppliers.has(summary.name);
             return (
               <div key={summary.name} className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                 {/* 供应商头部 */}
