@@ -2,17 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PurchaseOrder, Comment, StickyNoteItem, StickyNote } from '../types';
 import { useStarredPOs } from '../lib/hooks';
 import {
-  Pin, 
-  Paperclip, 
-  Send, 
-  Trash2, 
-  Bold, 
-  Italic, 
-  Highlighter, 
-  List, 
-  MessageSquare, 
-  Calendar, 
-  ChevronRight, 
+  Pin,
+  Paperclip,
+  Send,
+  Trash2,
+  Bold,
+  Italic,
+  Highlighter,
+  List,
+  MessageSquare,
+  Calendar,
+  ChevronRight,
   FileText,
   User,
   X,
@@ -22,7 +22,8 @@ import {
   ExternalLink,
   BookOpen,
   Filter,
-  Plus
+  Plus,
+  Star,
 } from 'lucide-react';
 
 interface SkeuomorphicNotesProps {
@@ -49,7 +50,7 @@ export default function SkeuomorphicNotes({
   const [selectedPOId, setSelectedPOId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'hasNotes' | 'starred'>('all');
-  const { starredIds } = useStarredPOs();
+  const { starredIds, toggleStar } = useStarredPOs();
   
   // Multiple notes active editing tracking
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
@@ -528,22 +529,46 @@ export default function SkeuomorphicNotes({
               const poDetails = getPOEntry(po.id);
               const commentsCount = poDetails.comments.length;
               const isSelected = po.id === selectedPOId;
+              const isStarred = starredIds.has(po.id);
               const activeColor = poDetails.notesList[0]?.color || 'yellow';
               const miniColors = skinThemeMap[activeColor];
 
               return (
-                <button
+                <div
                   key={po.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
                     setSelectedPOId(po.id);
                     setEditingNoteId(null);
                   }}
-                  className={`w-full text-left p-3.5 transition-all outline-none flex items-start gap-2.5 ${
-                    isSelected 
-                      ? 'bg-blue-50/40 border-r-4 border-r-blue-600' 
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelectedPOId(po.id);
+                      setEditingNoteId(null);
+                    }
+                  }}
+                  className={`w-full text-left p-3.5 transition-all outline-none flex items-start gap-2.5 cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-300 ${
+                    isSelected
+                      ? 'bg-blue-50/40 border-r-4 border-r-blue-600'
                       : 'hover:bg-slate-50/70'
                   }`}
                 >
+                  {/* 星标按钮：列表项左侧，stopPropagation 避免触发选中 */}
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleStar(po.id);
+                    }}
+                    className="shrink-0 p-1 rounded hover:bg-amber-100/60 transition-colors -ml-1 -mt-1"
+                    title={isStarred ? '取消星标' : '加星标'}
+                    aria-label={isStarred ? '取消星标' : '加星标'}
+                  >
+                    <Star className={`w-4 h-4 ${isStarred ? 'fill-amber-400 text-amber-500' : 'text-slate-300'}`} />
+                  </button>
+
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-1">
                       <span className="font-mono text-xs font-extrabold text-slate-900 truncate">
@@ -580,7 +605,7 @@ export default function SkeuomorphicNotes({
                   </div>
 
                   <ChevronRight className={`w-4 h-4 shrink-0 transition-transform text-slate-400 self-center ${isSelected ? 'translate-x-1 text-blue-600' : ''}`} />
-                </button>
+                </div>
               );
             })
           )}
