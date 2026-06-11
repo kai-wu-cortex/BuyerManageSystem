@@ -9,6 +9,7 @@ import POList from './components/POList';
 import SampleTracker from './components/SampleTracker';
 import SkeuomorphicNotes from './components/SkeuomorphicNotes';
 import SystemLogin from './components/SystemLogin';
+import MiniAppLauncher, { type MiniAppId } from './components/MiniAppLauncher';
 import { useStarredPOs } from './lib/hooks';
 import {
   clearCloudbaseCollections,
@@ -32,10 +33,11 @@ import {
   type CloudbaseAuthUser,
   type LedgerBackup,
 } from './lib/cloudbaseData';
-import { 
-  BarChart3, 
-  BookOpen, 
+import {
+  BarChart3,
+  BookOpen,
   Layers,
+  LayoutGrid,
   ShieldCheck,
   Menu,
   X,
@@ -47,10 +49,10 @@ import {
   RefreshCw,
   FileJson,
   Loader2,
-  LogOut
+  LogOut,
 } from 'lucide-react';
 
-type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes';
+type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes' | 'apps';
 type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
 const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
@@ -58,6 +60,10 @@ const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
   { id: 'ledger', label: '采购单台账', icon: <BookOpen className="w-5 h-5 shrink-0" /> },
   { id: 'inventory', label: '样品获取与打样追踪', icon: <Layers className="w-5 h-5 shrink-0" /> },
   { id: 'notes', label: '订单便签与流转', icon: <StickyNoteIcon className="w-5 h-5 shrink-0" /> },
+];
+
+const miniAppTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'apps', label: '小程序', icon: <LayoutGrid className="w-5 h-5 shrink-0" /> },
 ];
 
 function getErrorMessage(error: unknown): string {
@@ -215,6 +221,7 @@ export default function App() {
   
   // Navigation tabs: 'dashboard' | 'ledger' | 'inventory' | 'notes'
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
+  const [activeMiniApp, setActiveMiniApp] = useState<MiniAppId | null>(null);
   const [targetSearchTerm, setTargetSearchTerm] = useState('');
   const [autoAddNotePOId, setAutoAddNotePOId] = useState<string | null>(null);
   
@@ -1202,8 +1209,8 @@ export default function App() {
                   }}
                   title={isSidebarMinimized ? tab.label : undefined}
                   className={`w-full flex items-center ${isSidebarMinimized ? 'justify-center p-3.5' : 'gap-3 px-4 py-3'} text-xs font-semibold uppercase transition-all duration-200 rounded-xl cursor-pointer shrink-0 ${
-                    isActive 
-                      ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/25 font-bold scale-[1.01]' 
+                    isActive
+                      ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/25 font-bold scale-[1.01]'
                       : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
                   }`}
                 >
@@ -1225,6 +1232,36 @@ export default function App() {
                 </button>
               );
             })}
+
+            {/* 小程序分组：与上方业务模块视觉分隔，独立 section */}
+            {!isSidebarMinimized && (
+              <div className="pt-3 px-1 text-slate-500 font-mono text-[10px] tracking-wider uppercase font-bold whitespace-nowrap overflow-hidden border-t border-slate-800 mt-3">
+                小程序
+              </div>
+            )}
+            {isSidebarMinimized && <div className="my-2 mx-3 border-t border-slate-800" />}
+
+            {miniAppTabs.map(tab => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    handleTabChange(tab.id);
+                    setIsSidebarOpen(false);
+                  }}
+                  title={isSidebarMinimized ? tab.label : undefined}
+                  className={`w-full flex items-center ${isSidebarMinimized ? 'justify-center p-3.5' : 'gap-3 px-4 py-3'} text-xs font-semibold uppercase transition-all duration-200 rounded-xl cursor-pointer shrink-0 ${
+                    isActive
+                      ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/25 font-bold scale-[1.01]'
+                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <span className={`relative ${isActive ? 'text-white' : 'text-slate-400'}`}>{tab.icon}</span>
+                  {!isSidebarMinimized && <span className="whitespace-nowrap">{tab.label}</span>}
+                </button>
+              );
+            })}
           </nav>
         </aside>
 
@@ -1242,7 +1279,7 @@ export default function App() {
               </button>
               <div className="flex flex-col gap-1.5">
                 <h2 className="text-lg font-bold tracking-tight text-slate-800">
-                  {purchaseOrders.length === 0 ? '系统初始配准与数据流验证' : (
+                  {activeTab === 'apps' ? '系统自带小程序' : purchaseOrders.length === 0 ? '系统初始配准与数据流验证' : (
                     <>
                       {activeTab === 'dashboard' && '采购分析与库存态势大屏'}
                       {activeTab === 'ledger' && '采购合规与期账审计台账'}
@@ -1344,8 +1381,14 @@ export default function App() {
 
           {/* Central content container */}
           <main ref={mainScrollRef} className="flex-1 p-6 md:p-8 overflow-y-auto bg-[#F8FAFC]">
-            {purchaseOrders.length === 0 ? (
-              <POList 
+            {activeTab === 'apps' ? (
+              <MiniAppLauncher
+                activeApp={activeMiniApp}
+                onSelectApp={setActiveMiniApp}
+                authUser={authUser}
+              />
+            ) : purchaseOrders.length === 0 ? (
+              <POList
                 purchaseOrders={purchaseOrders}
                 onReplaceOrders={handleUpdateOrders}
                 authUser={authUser}

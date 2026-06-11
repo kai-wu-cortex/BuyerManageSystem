@@ -8,6 +8,7 @@ const ALLOWED_COLLECTIONS = new Set([
   'order_sticky_notes',
   'ledger_backups',
   'buyer_system_view_settings',
+  'noteboard_items',
 ]);
 
 type ApiRequest = {

@@ -86,7 +86,8 @@ export type CollectionName =
   | 'sample_records'
   | 'order_sticky_notes'
   | 'ledger_backups'
-  | 'buyer_system_view_settings';
+  | 'buyer_system_view_settings'
+  | 'noteboard_items';
 
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
 
