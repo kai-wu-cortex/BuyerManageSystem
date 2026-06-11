@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Trash2, Pin, Loader2, Image as ImageIcon, CheckSquare, Square, X as XIcon } from 'lucide-react';
+import { Plus, Trash2, Pin, Loader2, Image as ImageIcon, CheckSquare, Square, X as XIcon, Maximize2, Minimize2, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import {
   deleteDocument,
   listDocuments,
@@ -60,6 +60,34 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
+
+  // 全屏切换
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // 画布缩放级别 (50% ~ 200%)
+  const [zoom, setZoom] = useState(1);
+  const ZOOM_STEP = 0.1;
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 2;
+
+  // 按 Esc 退出全屏
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isFullscreen]);
+
+  // 缩放：Ctrl/Cmd + 滚轮
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    setZoom(prev => {
+      const next = prev - Math.sign(event.deltaY) * ZOOM_STEP;
+      return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 10) / 10));
+    });
+  };
 
   // 防止多选模式下选中文本时 useEffect 反复 setState
   useEffect(() => {
@@ -224,7 +252,13 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
   };
 
   return (
-    <div className="h-full flex flex-col gap-4">
+    <div
+      className={`flex flex-col gap-4 ${
+        isFullscreen
+          ? 'fixed inset-0 z-[9999] bg-slate-50 p-4'
+          : 'h-full'
+      }`}
+    >
       {/* 顶部工具栏 */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl shadow-sm px-4 py-3">
         <div className="flex items-center gap-3">
@@ -240,6 +274,59 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* 缩放控件 */}
+          <div className="flex items-center bg-white border border-slate-200 rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 10) / 10))}
+              disabled={zoom <= ZOOM_MIN}
+              className="px-2 py-1.5 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+              title="缩小 (Ctrl + 滚轮)"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setZoom(1)}
+              className="px-2 py-1.5 text-[10px] font-mono font-bold text-slate-600 hover:bg-slate-50 min-w-[44px]"
+              title="重置缩放"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 10) / 10))}
+              disabled={zoom >= ZOOM_MAX}
+              className="px-2 py-1.5 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed border-l border-slate-200"
+              title="放大 (Ctrl + 滚轮)"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* 重置缩放（独立按钮，更明显） */}
+          {zoom !== 1 && (
+            <button
+              type="button"
+              onClick={() => setZoom(1)}
+              className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+              title="重置缩放"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {/* 全屏切换 */}
+          <button
+            type="button"
+            onClick={() => setIsFullscreen(prev => !prev)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            title={isFullscreen ? '退出全屏 (Esc)' : '全屏'}
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            {isFullscreen ? '退出全屏' : '全屏'}
+          </button>
+
           <button
             type="button"
             onClick={() => setSelectionMode(prev => !prev)}
@@ -348,37 +435,45 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
         )}
       </AnimatePresence>
 
-      {/* 画布 */}
-      <div className="flex-1 overflow-auto bg-slate-100 rounded-2xl border border-slate-200 p-4 md:p-6 shadow-inner [background-image:radial-gradient(#CBD5E1_1.2px,transparent_1.2px)] [background-size:24px_24px]">
-        {loading ? (
-          <div className="h-full flex items-center justify-center text-slate-400 text-xs font-mono">
-            <Loader2 className="w-5 h-5 animate-spin mr-2" />
-            加载便签中…
-          </div>
-        ) : orderedItems.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 px-6">
-            <div className="text-5xl mb-3">📝</div>
-            <p className="text-xs font-bold text-slate-600 mb-1">画板还是空的</p>
-            <p className="text-[11px] text-slate-400">点击右上「添加便签」开始记录任意内容</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            <AnimatePresence>
-              {orderedItems.map(item => (
-                <NoteCard
-                  key={item.id}
-                  item={item}
-                  isSaving={savingIds.has(item.id)}
-                  selectionMode={selectionMode}
-                  isSelected={selectedIds.has(item.id)}
-                  onToggleSelect={() => toggleSelect(item.id)}
-                  onPatch={patch => handleUpdateItem(item.id, patch)}
-                  onDelete={() => handleDeleteItem(item.id)}
-                />
-              ))}
-            </AnimatePresence>
-          </div>
-        )}
+      {/* 画布 (Ctrl/Cmd + 滚轮缩放) */}
+      <div
+        onWheel={handleWheel}
+        className="flex-1 overflow-auto bg-slate-100 rounded-2xl border border-slate-200 p-4 md:p-6 shadow-inner [background-image:radial-gradient(#CBD5E1_1.2px,transparent_1.2px)] [background-size:24px_24px]"
+      >
+        <div
+          className="origin-top-left transition-transform duration-150"
+          style={{ transform: `scale(${zoom})`, width: `${100 / zoom}%` }}
+        >
+          {loading ? (
+            <div className="h-full flex items-center justify-center text-slate-400 text-xs font-mono py-16">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" />
+              加载便签中…
+            </div>
+          ) : orderedItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center text-center text-slate-400 px-6 py-16">
+              <div className="text-5xl mb-3">📝</div>
+              <p className="text-xs font-bold text-slate-600 mb-1">画板还是空的</p>
+              <p className="text-[11px] text-slate-400">点击右上「添加便签」开始记录任意内容</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              <AnimatePresence>
+                {orderedItems.map(item => (
+                  <NoteCard
+                    key={item.id}
+                    item={item}
+                    isSaving={savingIds.has(item.id)}
+                    selectionMode={selectionMode}
+                    isSelected={selectedIds.has(item.id)}
+                    onToggleSelect={() => toggleSelect(item.id)}
+                    onPatch={patch => handleUpdateItem(item.id, patch)}
+                    onDelete={() => handleDeleteItem(item.id)}
+                  />
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
