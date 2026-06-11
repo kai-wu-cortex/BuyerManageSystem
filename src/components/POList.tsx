@@ -1105,14 +1105,14 @@ export default function POList({
   }, [filteredLedgerRows, sheetSortField, sheetSortOrder]);
 
   // Reset scroll viewport on search/filter/sort/data changes
-  // 加载新台账后 purchaseOrders 长度变了, 老的 scrollTop 可能超出新数据范围
-  // 导致虚拟滚动看到空白; 这里要把 scroll 复位
+  // 加载新台账后 purchaseOrders 引用变了 (即使长度相同, 内容也可能变)
+  // 老的 scrollTop 可能超出新数据范围 → 虚拟滚动看到空白
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }
     setScrollTop(0);
-  }, [searchTerm, statusFilter, execFilter, inboundFilter, sheetSortField, sheetSortOrder, purchaseOrders.length]);
+  }, [searchTerm, statusFilter, execFilter, inboundFilter, sheetSortField, sheetSortOrder, purchaseOrders]);
 
   const totalAmountSum = sortedLedgerRows.reduce((sum, row) => sum + (row.orderedQty * row.price), 0);
   const totalQtySum = sortedLedgerRows.reduce((sum, row) => sum + row.orderedQty, 0);
@@ -1520,7 +1520,8 @@ export default function POList({
         <div
           ref={scrollContainerRef}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-          className="overflow-auto max-w-full max-h-[640px]"
+          className="overflow-auto max-w-full"
+          style={{ maxHeight: 'calc(100vh - 280px)', minHeight: '400px' }}
         >
           {(() => {
             const visibleColumns = columnsList.filter(col => !hiddenFields.includes(col.field));
@@ -1533,9 +1534,10 @@ export default function POList({
             };
             const singleRowHeight = rowHeights[rowHeight];
             const totalRows = sortedLedgerRows.length;
-            
+
             // Viewport calculation with 8 row padding buffer
-            const viewportHeight = 640;
+            // 读取实际容器高度, 避免与硬编码不一致
+            const viewportHeight = scrollContainerRef.current?.clientHeight ?? 640;
             const startIndex = Math.max(0, Math.floor(scrollTop / singleRowHeight) - 8);
             const endIndex = Math.min(totalRows, Math.ceil((scrollTop + viewportHeight) / singleRowHeight) + 8);
             const visibleRows = sortedLedgerRows.slice(startIndex, endIndex);
