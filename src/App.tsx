@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POStatus, PurchaseExecutionStatus } from './types';
-import * as XLSX from 'xlsx';
-import ExcelJS from 'exceljs';
+// xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { parseClipboardLine } from './utils/ledgerHelper';
 import { SUPPLIER_MATERIAL_MAPPING } from './components/POList';
 import Dashboard from './components/Dashboard';
@@ -672,6 +671,11 @@ export default function App() {
 
       if (extension === 'xlsx') {
         let finalRows: unknown[][] = [];
+        // 按需加载电子表格解析库，避免增大首屏包体积
+        const [{ default: ExcelJS }, XLSX] = await Promise.all([
+          import('exceljs'),
+          import('xlsx'),
+        ]);
         try {
           const workbook = new ExcelJS.Workbook();
           const buffer = await file.arrayBuffer();

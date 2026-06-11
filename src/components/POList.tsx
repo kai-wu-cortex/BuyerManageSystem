@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PurchaseOrder, POStatus, PurchaseExecutionStatus, InboundStatus, OrderItem } from '../types';
 import { getFlatLedgerRows, FlatLedgerRow, parseClipboardLine } from '../utils/ledgerHelper';
-import * as XLSX from 'xlsx';
-import ExcelJS from 'exceljs';
+// xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
@@ -909,6 +908,12 @@ export default function POList({
     try {
       let finalRows: any[][] = [];
       const extension = file.name.split('.').pop()?.toLowerCase();
+
+      // 按需加载电子表格解析库
+      const [{ default: ExcelJS }, XLSX] = await Promise.all([
+        import('exceljs'),
+        import('xlsx'),
+      ]);
 
       try {
         if (extension === 'xlsx') {
