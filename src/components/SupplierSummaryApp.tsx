@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Search, Briefcase, Package, Calendar, Star } from 'lucide-react';
 import { PurchaseOrder } from '../types';
 
@@ -140,19 +140,31 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
       return String(value).toLowerCase().replace(/\s+/g, '');
     };
     const term = normalize(searchTerm);
-    const filtered = !term
-      ? allSummaries
-      : allSummaries.filter(s => {
-          if (normalize(s.name).includes(term)) return true;
-          return s.materials.some(m =>
+    if (!term) {
+      // 无搜索词：按 sort 排序后返回全部
+      return [...allSummaries].sort(sortComparator);
+    }
+
+    const result: SupplierSummary[] = [];
+    for (const s of allSummaries) {
+      const supplierNameHit = normalize(s.name).includes(term);
+      // 物料过滤：只保留命中的（除非供应商名命中，则保留所有物料供概览）
+      const matchedMaterials = supplierNameHit
+        ? s.materials
+        : s.materials.filter(m =>
             normalize(m.name).includes(term) ||
             normalize(m.code).includes(term) ||
             normalize(m.spec).includes(term) ||
             normalize(m.unit).includes(term),
           );
-        });
 
-    return [...filtered].sort((a, b) => {
+      if (supplierNameHit || matchedMaterials.length > 0) {
+        result.push({ ...s, materials: matchedMaterials });
+      }
+    }
+    return result.sort(sortComparator);
+
+    function sortComparator(a: SupplierSummary, b: SupplierSummary): number {
       switch (sortField) {
         case 'orderCount':
           return b.orderCount - a.orderCount;
@@ -164,7 +176,7 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
         default:
           return b.totalAmount - a.totalAmount;
       }
-    });
+    }
   }, [allSummaries, searchTerm, sortField]);
 
   const toggleExpand = (name: string) => {
@@ -179,11 +191,12 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
   const expandAll = () => setExpandedSuppliers(new Set(filteredSummaries.map(s => s.name)));
   const collapseAll = () => setExpandedSuppliers(new Set());
 
-  // 当搜索词非空时，自动展开所有匹配到的供应商，方便用户直接看到物料明细
-  const effectiveExpandedSuppliers = useMemo(() => {
-    if (!searchTerm.trim()) return expandedSuppliers;
-    return new Set(filteredSummaries.map(s => s.name));
-  }, [searchTerm, expandedSuppliers, filteredSummaries]);
+  // 搜索词变化时自动展开所有命中的供应商（一次性写入 state，不再派生屏蔽用户操作）
+  useEffect(() => {
+    if (!searchTerm.trim()) return;
+    setExpandedSuppliers(new Set(filteredSummaries.map(s => s.name)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm]);
 
   const totals = useMemo(() => {
     return filteredSummaries.reduce(
@@ -268,7 +281,7 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
           </div>
         ) : (
           filteredSummaries.map(summary => {
-            const expanded = effectiveExpandedSuppliers.has(summary.name);
+            const expanded = expandedSuppliers.has(summary.name);
             return (
               <div key={summary.name} className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
                 {/* 供应商头部 */}
