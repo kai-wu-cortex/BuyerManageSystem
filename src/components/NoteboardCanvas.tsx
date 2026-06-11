@@ -202,9 +202,11 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
   }, [uid]);
 
   const orderedItems = useMemo(() => {
+    // 排序按创建时间倒序，编辑/调宽度/换颜色都不会改变便签位置
+    // 仅置顶状态变化会让置顶卡片浮到最前
     return [...items].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      return b.updatedAt.localeCompare(a.updatedAt);
+      return b.createdAt.localeCompare(a.createdAt);
     });
   }, [items]);
 
@@ -529,8 +531,8 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
         }`}
       >
         <div
-          className="origin-top-left transition-transform duration-150"
-          style={{ transform: `scale(${zoom})` }}
+          className="transition-[zoom] duration-150"
+          style={{ zoom }}
         >
           {loading ? (
             <div className="h-full flex items-center justify-center text-slate-400 text-xs font-mono py-16">
