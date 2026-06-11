@@ -1271,50 +1271,50 @@ export default function App() {
         <div className="flex-1 flex flex-col overflow-hidden bg-[#F8FAFC] lg:m-4 lg:ml-2 lg:h-[calc(100vh-2rem)] lg:rounded-2xl lg:shadow-xl lg:border lg:border-slate-200/80">
           
           {/* Top Header */}
-          <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between px-6 py-4 bg-white border-b border-slate-200 gap-4">
-            <div className="flex items-center gap-3">
-              <button 
+          <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between px-4 py-2 bg-white border-b border-slate-200 gap-3">
+            <div className="flex items-center gap-2">
+              <button
                 onClick={() => setIsSidebarOpen(true)}
-                className="lg:hidden p-2 rounded-md hover:bg-slate-100 text-slate-600 cursor-pointer"
+                className="lg:hidden p-1.5 rounded-md hover:bg-slate-100 text-slate-600 cursor-pointer"
               >
                 <Menu className="w-5 h-5" />
               </button>
-              <div className="flex flex-col gap-1.5">
-                <h2 className="text-lg font-bold tracking-tight text-slate-800">
-                  {activeTab === 'noteboard' ? '便签画板 / NOTEBOARD' : activeTab === 'supplier-summary' ? '供应商汇总 / SUPPLIER SUMMARY' : purchaseOrders.length === 0 ? '系统初始配准与数据流验证' : (
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold tracking-tight text-slate-800">
+                  {activeTab === 'noteboard' ? '便签画板' : activeTab === 'supplier-summary' ? '供应商汇总' : purchaseOrders.length === 0 ? '系统初始配准' : (
                     <>
-                      {activeTab === 'dashboard' && '采购分析与库存态势大屏'}
-                      {activeTab === 'ledger' && '采购合规与期账审计台账'}
-                      {activeTab === 'inventory' && '新样获取与打样跟进跟踪'}
-                      {activeTab === 'notes' && '订单富文本便签与协同留言板'}
+                      {activeTab === 'dashboard' && '采购物料大屏'}
+                      {activeTab === 'ledger' && '采购单台账'}
+                      {activeTab === 'inventory' && '样品获取与打样追踪'}
+                      {activeTab === 'notes' && '订单便签与流转'}
                     </>
                   )}
                 </h2>
-                <span className="px-2.5 py-1 w-fit rounded bg-slate-100 text-slate-600 text-[10px] font-mono font-medium">
-                  UTC CLOCK: {currentTime || 'Loading...'}
+                <span className="hidden md:inline-flex px-2 py-0.5 rounded bg-slate-100 text-slate-500 text-[10px] font-mono leading-none">
+                  {currentTime || '...'}
                 </span>
               </div>
             </div>
-            
-            <div className="flex items-center gap-6 self-end sm:self-auto">
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">CloudBase User</span>
-                <div className="flex items-center gap-2">
-                  <span className="max-w-36 truncate font-mono text-xs font-bold text-slate-700">
+
+            <div className="flex items-center gap-3 self-end sm:self-auto">
+              <div className="flex flex-col items-end leading-none gap-0.5">
+                <span className="text-[9px] uppercase font-semibold text-slate-400 font-mono">User</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="max-w-32 truncate font-mono text-[11px] font-bold text-slate-700">
                     {authUser?.username ?? authUser?.email ?? authUser?.uid ?? '已登入'}
                   </span>
                   <button
                     onClick={handleSignOut}
-                    className="h-7 w-7 rounded border border-slate-200 bg-white text-slate-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50 flex items-center justify-center transition"
+                    className="h-6 w-6 rounded border border-slate-200 bg-white text-slate-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50 flex items-center justify-center transition"
                     title="退出登入"
                   >
-                    <LogOut className="h-3.5 w-3.5" />
+                    <LogOut className="h-3 w-3" />
                   </button>
                 </div>
               </div>
-              <div className="h-8 w-px bg-slate-200"></div>
-              <div className="flex flex-col items-end gap-1.5">
-                <div className="flex items-center gap-2">
+              <div className="h-6 w-px bg-slate-200"></div>
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex items-center gap-1.5">
                   <input
                     type="file"
                     accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1328,20 +1328,20 @@ export default function App() {
                       loadHistoryBackups();
                     }}
                     disabled={isUploading}
-                    className="relative px-3 py-1.5 border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-xs font-bold transition-all flex items-center gap-1.5 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="relative px-2.5 py-1 border border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded text-[11px] font-bold transition-all flex items-center gap-1 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                     title={hasLedgerUpdate ? '台账有更新，点击选择云端最新台账' : '选择云端历史存储的台账文件并加载'}
                   >
                     {hasLedgerUpdate && (
-                      <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />
+                      <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
                     )}
-                    <UploadCloud className="w-3.5 h-3.5" />
-                    {isUploading ? '正在加载...' : '加载台账'}
+                    <UploadCloud className="w-3 h-3" />
+                    {isUploading ? '加载中...' : '加载台账'}
                   </button>
-                  <button 
+                  <button
                     onClick={handleClearAllData}
-                    className={`px-3 py-1.5 border rounded text-xs font-bold transition-all ${
-                      isConfirmingClear 
-                        ? 'bg-red-600 text-white border-red-600 hover:bg-red-700 shadow-md shadow-red-500/20' 
+                    className={`px-2.5 py-1 border rounded text-[11px] font-bold transition-all ${
+                      isConfirmingClear
+                        ? 'bg-red-600 text-white border-red-600 hover:bg-red-700 shadow-md shadow-red-500/20'
                         : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
                     }`}
                     title="清除所有本地缓存数据，恢复初始状态"
@@ -1350,31 +1350,31 @@ export default function App() {
                   </button>
                 </div>
                 {hasLedgerUpdate && latestRemoteLedgerBackup && (
-                  <div className="max-w-[230px] rounded border border-red-100 bg-red-50 px-2 py-1 text-[10px] font-bold leading-none text-red-600 flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+                  <div className="max-w-[230px] rounded border border-red-100 bg-red-50 px-1.5 py-0.5 text-[9px] font-bold leading-none text-red-600 flex items-center gap-1">
+                    <span className="h-1 w-1 rounded-full bg-red-500 shrink-0" />
                     <span className="shrink-0">台账有更新</span>
                     <span className="font-mono font-semibold text-red-500 truncate">{latestRemoteLedgerBackup.timeCreated}</span>
                   </div>
                 )}
               </div>
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">延期预警 / OVERDUE</span>
+              <div className="flex flex-col items-end leading-none gap-0.5">
+                <span className="text-[9px] uppercase font-semibold text-slate-400 font-mono">延期</span>
                 {(() => {
                   const overdueCount = purchaseOrders.filter(po => {
                     if (po.inboundStatus === '全部入库') return false;
                     return new Date(po.deliveryDate).getTime() < new Date().getTime();
                   }).length;
                   return (
-                    <span className={`font-mono text-sm md:text-base font-bold ${overdueCount > 0 ? 'text-[#EF4444] animate-pulse font-extrabold' : 'text-[#22C55E]'}`}>
-                      {overdueCount} 单延期
+                    <span className={`font-mono text-xs font-bold ${overdueCount > 0 ? 'text-[#EF4444] animate-pulse font-extrabold' : 'text-[#22C55E]'}`}>
+                      {overdueCount} 单
                     </span>
                   );
                 })()}
               </div>
-              <div className="h-8 w-px bg-slate-200"></div>
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] uppercase font-semibold text-slate-400 font-mono tracking-wider">星标订单 / STARRED</span>
-                <span className="font-mono text-sm md:text-base font-bold text-slate-800">
+              <div className="h-6 w-px bg-slate-200"></div>
+              <div className="flex flex-col items-end leading-none gap-0.5">
+                <span className="text-[9px] uppercase font-semibold text-slate-400 font-mono">星标</span>
+                <span className="font-mono text-xs font-bold text-slate-800">
                   {starredIds.size} 笔
                 </span>
               </div>
@@ -1382,7 +1382,7 @@ export default function App() {
           </header>
 
           {/* Central content container */}
-          <main ref={mainScrollRef} className="flex-1 p-6 md:p-8 overflow-y-auto bg-[#F8FAFC]">
+          <main ref={mainScrollRef} className="flex-1 p-3 md:p-4 overflow-y-auto bg-[#F8FAFC]">
             {activeTab === 'noteboard' ? (
               <NoteboardCanvas authUser={authUser} />
             ) : activeTab === 'supplier-summary' ? (
