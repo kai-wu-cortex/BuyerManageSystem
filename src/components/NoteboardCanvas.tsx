@@ -27,9 +27,15 @@ interface NoteboardItem {
   html: string;
   color: StickyColor;
   pinned: boolean;
+  /** 用户可调整的便签宽度（像素），未设则使用默认 */
+  width?: number;
   createdAt: string;
   updatedAt: string;
 }
+
+const DEFAULT_NOTE_WIDTH = 260;
+const MIN_NOTE_WIDTH = 160;
+const MAX_NOTE_WIDTH = 600;
 
 interface NoteboardCanvasProps {
   authUser: CloudbaseAuthUser | null;
@@ -538,7 +544,7 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
               <p className="text-[11px] text-slate-400">点击右上「添加便签」开始记录任意内容</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div className="flex flex-wrap gap-4 items-start">
               <AnimatePresence>
                 {orderedItems.map(item => (
                   <NoteCard
@@ -645,6 +651,30 @@ function NoteCard({ item, isSaving, selectionMode, isSelected, onToggleSelect, o
     document.execCommand('insertHTML', false, img);
   };
 
+  // 宽度拖动调节
+  const widthDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const handleWidthDragStart = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    event.preventDefault();
+    widthDragRef.current = {
+      startX: event.clientX,
+      startWidth: item.width ?? DEFAULT_NOTE_WIDTH,
+    };
+    const onMove = (ev: MouseEvent) => {
+      const state = widthDragRef.current;
+      if (!state) return;
+      const next = Math.min(MAX_NOTE_WIDTH, Math.max(MIN_NOTE_WIDTH, state.startWidth + (ev.clientX - state.startX)));
+      onPatch({ width: Math.round(next) });
+    };
+    const onUp = () => {
+      widthDragRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   return (
     <motion.div
       layout
@@ -652,6 +682,7 @@ function NoteCard({ item, isSaving, selectionMode, isSelected, onToggleSelect, o
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.85 }}
       transition={{ type: 'spring', damping: 22, stiffness: 220 }}
+      style={{ width: item.width ?? DEFAULT_NOTE_WIDTH }}
       className={`${skin.bg} ${skin.border} border rounded-xl shadow-md flex flex-col min-h-[180px] hover:shadow-lg transition-shadow group relative ${
         selectionMode && isSelected ? 'ring-4 ring-blue-400 ring-offset-2 ring-offset-slate-100' : ''
       }`}
@@ -754,6 +785,22 @@ function NoteCard({ item, isSaving, selectionMode, isSelected, onToggleSelect, o
         <span>{new Date(item.updatedAt).toLocaleString('zh-CN', { hour12: false })}</span>
         {item.pinned && <span className="text-rose-600 font-bold">📌 置顶</span>}
       </div>
+
+      {/* 宽度调节手柄（右下角） */}
+      {!selectionMode && (
+        <div
+          onMouseDown={handleWidthDragStart}
+          onDoubleClick={event => {
+            event.stopPropagation();
+            onPatch({ width: DEFAULT_NOTE_WIDTH });
+          }}
+          title="拖动调整宽度 · 双击恢复默认"
+          className="absolute bottom-1 right-1 w-3 h-3 cursor-ew-resize opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{
+            backgroundImage: 'linear-gradient(135deg, transparent 50%, rgb(100 116 139) 50%, rgb(100 116 139) 60%, transparent 60%, transparent 70%, rgb(100 116 139) 70%, rgb(100 116 139) 80%, transparent 80%)',
+          }}
+        />
+      )}
     </motion.div>
   );
 }
