@@ -69,6 +69,11 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
   const ZOOM_MIN = 0.5;
   const ZOOM_MAX = 2;
 
+  // 中键拖动 / 触控板平移状态
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const panStateRef = useRef<{ startX: number; startY: number; scrollLeft: number; scrollTop: number } | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+
   // 按 Esc 退出全屏
   useEffect(() => {
     if (!isFullscreen) return;
@@ -79,15 +84,90 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [isFullscreen]);
 
-  // 缩放：Ctrl/Cmd + 滚轮
-  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (!event.ctrlKey && !event.metaKey) return;
-    event.preventDefault();
-    setZoom(prev => {
-      const next = prev - Math.sign(event.deltaY) * ZOOM_STEP;
-      return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 10) / 10));
-    });
-  };
+  // 原生 wheel 事件：必须 passive:false 才能 preventDefault
+  // 同时统一处理 Ctrl/Cmd+滚轮 (鼠标缩放) 和触控板捏合手势 (浏览器自动设 ctrlKey=true)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (event: WheelEvent) => {
+      // 触控板捏合 OR 鼠标 Ctrl/Cmd + 滚轮 → 缩放
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        // 触控板捏合的 deltaY 较小且连续，鼠标滚轮 deltaY 较大
+        // 用更细的步长以适配触控板
+        const delta = event.deltaY;
+        const factor = Math.abs(delta) < 20 ? 0.02 : ZOOM_STEP;
+        setZoom(prev => {
+          const next = prev - Math.sign(delta) * factor;
+          return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 100) / 100));
+        });
+        return;
+      }
+      // 触控板两指拖动 → 滚动画布（浏览器默认就会触发 scroll，不需要 preventDefault）
+      // shift + 滚轮 → 横向滚动（浏览器自带，不需手动处理）
+    };
+
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // 中键拖动画布
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onMouseDown = (event: MouseEvent) => {
+      // button: 0=左键 1=中键 2=右键
+      if (event.button !== 1) return;
+      event.preventDefault();
+      panStateRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        scrollLeft: canvas.scrollLeft,
+        scrollTop: canvas.scrollTop,
+      };
+      setIsPanning(true);
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      const state = panStateRef.current;
+      if (!state) return;
+      event.preventDefault();
+      canvas.scrollLeft = state.scrollLeft - (event.clientX - state.startX);
+      canvas.scrollTop = state.scrollTop - (event.clientY - state.startY);
+    };
+
+    const onMouseUp = (event: MouseEvent) => {
+      if (event.button !== 1) return;
+      panStateRef.current = null;
+      setIsPanning(false);
+    };
+
+    const onMouseLeave = () => {
+      panStateRef.current = null;
+      setIsPanning(false);
+    };
+
+    // 鼠标中键默认会触发"自动滚动模式"（光标变指南针），通过取消 auxclick 阻止
+    const onAuxClick = (event: MouseEvent) => {
+      if (event.button === 1) event.preventDefault();
+    };
+
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    canvas.addEventListener('mouseleave', onMouseLeave);
+    canvas.addEventListener('auxclick', onAuxClick);
+
+    return () => {
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      canvas.removeEventListener('mouseleave', onMouseLeave);
+      canvas.removeEventListener('auxclick', onAuxClick);
+    };
+  }, []);
 
   // 防止多选模式下选中文本时 useEffect 反复 setState
   useEffect(() => {
@@ -435,10 +515,12 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
         )}
       </AnimatePresence>
 
-      {/* 画布 (Ctrl/Cmd + 滚轮缩放) */}
+      {/* 画布 (Ctrl/Cmd + 滚轮 / 触控板捏合 缩放; 中键拖动平移) */}
       <div
-        onWheel={handleWheel}
-        className="flex-1 overflow-auto bg-slate-100 rounded-2xl border border-slate-200 p-4 md:p-6 shadow-inner [background-image:radial-gradient(#CBD5E1_1.2px,transparent_1.2px)] [background-size:24px_24px]"
+        ref={canvasRef}
+        className={`flex-1 overflow-auto bg-slate-100 rounded-2xl border border-slate-200 p-4 md:p-6 shadow-inner [background-image:radial-gradient(#CBD5E1_1.2px,transparent_1.2px)] [background-size:24px_24px] ${
+          isPanning ? 'cursor-grabbing select-none' : ''
+        }`}
       >
         <div
           className="origin-top-left transition-transform duration-150"
@@ -662,7 +744,7 @@ function NoteCard({ item, isSaving, selectionMode, isSelected, onToggleSelect, o
         onInput={handleEditorInput}
         onPaste={handlePaste}
         data-placeholder="在这里写点什么，可粘贴/拖拽图片…"
-        className={`flex-1 p-3 text-xs leading-relaxed text-slate-800 outline-none font-sans empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400 [&_img]:max-w-full ${
+        className={`flex-1 p-3 text-xs leading-relaxed text-slate-800 outline-none font-sans empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400 [&_img]:max-w-full [&_img]:h-auto [&_img]:block ${
           selectionMode ? 'pointer-events-none select-none' : ''
         }`}
       />
