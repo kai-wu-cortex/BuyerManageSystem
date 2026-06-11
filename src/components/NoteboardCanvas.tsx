@@ -524,7 +524,7 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
       >
         <div
           className="origin-top-left transition-transform duration-150"
-          style={{ transform: `scale(${zoom})`, width: `${100 / zoom}%` }}
+          style={{ transform: `scale(${zoom})` }}
         >
           {loading ? (
             <div className="h-full flex items-center justify-center text-slate-400 text-xs font-mono py-16">
