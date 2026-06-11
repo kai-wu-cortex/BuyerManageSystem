@@ -9,7 +9,7 @@ import POList from './components/POList';
 import SampleTracker from './components/SampleTracker';
 import SkeuomorphicNotes from './components/SkeuomorphicNotes';
 import SystemLogin from './components/SystemLogin';
-import MiniAppLauncher, { type MiniAppId } from './components/MiniAppLauncher';
+import NoteboardCanvas from './components/NoteboardCanvas';
 import { useStarredPOs } from './lib/hooks';
 import {
   clearCloudbaseCollections,
@@ -52,7 +52,7 @@ import {
   LogOut,
 } from 'lucide-react';
 
-type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes' | 'apps';
+type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes' | 'noteboard';
 type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
 const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
@@ -63,7 +63,7 @@ const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
 ];
 
 const miniAppTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
-  { id: 'apps', label: '小程序', icon: <LayoutGrid className="w-5 h-5 shrink-0" /> },
+  { id: 'noteboard', label: '便签画板', icon: <LayoutGrid className="w-5 h-5 shrink-0" /> },
 ];
 
 function getErrorMessage(error: unknown): string {
@@ -221,7 +221,6 @@ export default function App() {
   
   // Navigation tabs: 'dashboard' | 'ledger' | 'inventory' | 'notes'
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
-  const [activeMiniApp, setActiveMiniApp] = useState<MiniAppId | null>(null);
   const [targetSearchTerm, setTargetSearchTerm] = useState('');
   const [autoAddNotePOId, setAutoAddNotePOId] = useState<string | null>(null);
   
@@ -1279,7 +1278,7 @@ export default function App() {
               </button>
               <div className="flex flex-col gap-1.5">
                 <h2 className="text-lg font-bold tracking-tight text-slate-800">
-                  {activeTab === 'apps' ? '系统自带小程序' : purchaseOrders.length === 0 ? '系统初始配准与数据流验证' : (
+                  {activeTab === 'noteboard' ? '便签画板 / NOTEBOARD' : purchaseOrders.length === 0 ? '系统初始配准与数据流验证' : (
                     <>
                       {activeTab === 'dashboard' && '采购分析与库存态势大屏'}
                       {activeTab === 'ledger' && '采购合规与期账审计台账'}
@@ -1381,12 +1380,8 @@ export default function App() {
 
           {/* Central content container */}
           <main ref={mainScrollRef} className="flex-1 p-6 md:p-8 overflow-y-auto bg-[#F8FAFC]">
-            {activeTab === 'apps' ? (
-              <MiniAppLauncher
-                activeApp={activeMiniApp}
-                onSelectApp={setActiveMiniApp}
-                authUser={authUser}
-              />
+            {activeTab === 'noteboard' ? (
+              <NoteboardCanvas authUser={authUser} />
             ) : purchaseOrders.length === 0 ? (
               <POList
                 purchaseOrders={purchaseOrders}
