@@ -1104,13 +1104,15 @@ export default function POList({
     });
   }, [filteredLedgerRows, sheetSortField, sheetSortOrder]);
 
-  // Reset scroll viewport on search/filter/sort changes
+  // Reset scroll viewport on search/filter/sort/data changes
+  // 加载新台账后 purchaseOrders 长度变了, 老的 scrollTop 可能超出新数据范围
+  // 导致虚拟滚动看到空白; 这里要把 scroll 复位
   useEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }
     setScrollTop(0);
-  }, [searchTerm, statusFilter, execFilter, inboundFilter, sheetSortField, sheetSortOrder]);
+  }, [searchTerm, statusFilter, execFilter, inboundFilter, sheetSortField, sheetSortOrder, purchaseOrders.length]);
 
   const totalAmountSum = sortedLedgerRows.reduce((sum, row) => sum + (row.orderedQty * row.price), 0);
   const totalQtySum = sortedLedgerRows.reduce((sum, row) => sum + row.orderedQty, 0);
