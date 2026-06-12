@@ -305,6 +305,7 @@ export async function signInToCloudbase(username: string, password: string): Pro
   try {
     response = await fetch('/api/login', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: normalizeCloudbaseUsername(username),
@@ -335,6 +336,10 @@ export async function signInToCloudbase(username: string, password: string): Pro
 }
 
 export async function signOutFromCloudbase(): Promise<void> {
+  await fetch('/api/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+  }).catch(() => undefined);
   clearStoredAuthUser();
 }
 
