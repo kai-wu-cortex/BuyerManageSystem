@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PurchaseOrder, POStatus, PurchaseExecutionStatus, InboundStatus, OrderItem } from '../types';
 import { getFlatLedgerRows, FlatLedgerRow, parseClipboardLine } from '../utils/ledgerHelper';
-import { rowsToLedgerLines } from '../utils/ledgerImport';
+import { analyzeLedgerHeaders, rowsToLedgerLines } from '../utils/ledgerImport';
 import { getLedgerRowsForView } from '../utils/ledgerView';
 import { SUPPLIER_MATERIAL_MAPPING } from '../utils/supplierMaterialMapping';
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
@@ -907,8 +907,8 @@ export default function POList({
       if (!poMap[poId]) {
         poMap[poId] = {
           ...parsed.po,
-          executionStatus: parsed.po.executionStatus || "未执行",
-          inboundStatus: parsed.po.inboundStatus || "未入库",
+          executionStatus: parsed.po.executionStatus ?? "未执行",
+          inboundStatus: parsed.po.inboundStatus ?? "未入库",
           items: [parsed.item as OrderItem]
         } as PurchaseOrder;
       } else {
@@ -917,6 +917,26 @@ export default function POList({
     });
 
     onReplaceOrders(Object.values(poMap));
+  };
+
+  const validateLedgerRowsBeforeImport = (rows: unknown[][]): boolean => {
+    const analysis = analyzeLedgerHeaders(rows);
+    if (!analysis.hasHeader) return true;
+
+    if (analysis.missingRequiredHeaders.length > 0) {
+      alert(
+        `台账表头缺少核心字段，已暂停上传。\n\n缺少字段：\n${analysis.missingRequiredHeaders.map(field => `• ${field}`).join('\n')}`,
+      );
+      return false;
+    }
+
+    if (analysis.unknownHeaders.length > 0) {
+      return window.confirm(
+        `检测到上传台账中有系统不认识的字段：\n\n${analysis.unknownHeaders.map(field => `• ${field}`).join('\n')}\n\n选择“确定”将删除这些异常字段后继续上传；选择“取消”将暂停上传。`,
+      );
+    }
+
+    return true;
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -963,6 +983,10 @@ export default function POList({
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
         finalRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      }
+
+      if (!validateLedgerRowsBeforeImport(finalRows)) {
+        return;
       }
       
       const lines = rowsToLedgerLines(finalRows);

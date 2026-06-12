@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   cleanUndefined,
   createBuyerSystemViewSettingsRecord,
+  createLedgerBackupDocuments,
   formatLedgerBackupSize,
   getBuyerSystemAccess,
   getBuyerSystemViewSettingsDocumentId,
@@ -9,9 +10,11 @@ import {
   isLedgerBackupNewerThanLoaded,
   normalizeCloudbaseDocumentId,
   normalizeCloudbaseUsername,
+  setDocument,
   sortBackupsNewestFirst,
   validateCloudbaseLoginInput,
 } from './cloudbaseData';
+import type { PurchaseOrder } from '../types';
 
 const cleaned = cleanUndefined({
   keep: 'value',
@@ -28,6 +31,47 @@ assert.deepEqual(cleaned, {
   nested: { keep: 1 },
   list: ['a', { keep: true }],
 });
+
+function makeOrder(id: string): PurchaseOrder {
+  return {
+    id,
+    date: '2026-06-12',
+    supplier: '供应商A',
+    status: '已审核',
+    executionStatus: '未执行',
+    inboundStatus: '未入库',
+    discountRate: 0,
+    discountAmount: 0,
+    transportMethod: '',
+    settlementType: '',
+    deliveryDate: '',
+    remarks: '',
+    items: [{
+      code: `MAT-${id}`,
+      name: '很长的物料名称'.repeat(8),
+      spec: '',
+      category: '',
+      unit: '',
+      orderedQty: 1,
+      price: 2,
+      taxAmount: 0,
+      remark: '',
+      receivedQty: 0,
+    }],
+  };
+}
+
+const { backup: chunkedBackup, chunks } = createLedgerBackupDocuments(
+  [makeOrder('001'), makeOrder('002'), makeOrder('003')],
+  new Date('2026-06-12T00:00:00.000Z'),
+  520,
+);
+assert.equal(chunkedBackup.orders, undefined, 'new ledger backup metadata should not contain full orders');
+assert.equal(chunkedBackup.chunkCount, chunks.length);
+assert.equal(chunkedBackup.orderCount, 3);
+assert.ok(chunks.length > 1, 'large ledger backup should be split into chunks');
+assert.deepEqual(chunks.flatMap(chunk => chunk.orders).map(order => order.id), ['001', '002', '003']);
+assert.ok(chunks.every(chunk => new Blob([JSON.stringify(chunk)]).size <= 900000), 'each chunk should stay below request size limit');
 
 assert.equal(normalizeCloudbaseDocumentId('CG/DD 2026-001'), 'CG_DD_2026-001');
 assert.equal(normalizeCloudbaseDocumentId(''), 'document');
@@ -81,5 +125,13 @@ assert.deepEqual(
     updatedAt: '2026-06-08T10:00:00.000Z',
   },
 );
+
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (async () => new Response('Request Entity Too Large', { status: 413, statusText: 'Content Too Large' })) as typeof fetch;
+await assert.rejects(
+  () => setDocument('ledger_backups', 'too-large', { id: 'too-large' }),
+  /请求内容过大/,
+);
+globalThis.fetch = originalFetch;
 
 console.log('cloudbaseData tests passed ✅');

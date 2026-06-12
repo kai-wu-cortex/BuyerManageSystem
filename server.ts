@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { parseSampleWithGemini } from "./src/lib/geminiSampleParser";
 import { handleMongoCollectionRequest, handleMongoDocumentRequest } from "./src/server/mongoDataApi";
 import { handleLoginRequest } from "./src/server/loginApi";
+import { getMongoDb } from "./src/lib/mongodb";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -22,6 +23,32 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 if (!process.env.GEMINI_API_KEY) {
   console.log("GEMINI_API_KEY environment variable is not defined. Falling back to rule-based parser on client.");
 }
+
+app.get("/api/health", (_req, res) => {
+  return res.status(200).json({
+    success: true,
+    service: "buyer-manage-system",
+    time: new Date().toISOString(),
+  });
+});
+
+app.get("/api/health/db", async (_req, res) => {
+  try {
+    const db = await getMongoDb();
+    await db.command({ ping: 1 });
+    return res.status(200).json({
+      success: true,
+      database: "ok",
+      time: new Date().toISOString(),
+    });
+  } catch (error) {
+    return res.status(503).json({
+      success: false,
+      code: "DATABASE_UNAVAILABLE",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
 
 // REST API endpoint to parse clipboard data (Rich Text + Clipboard screenshot Image)
 app.post("/api/gemini/parse-sample", async (req, res) => {

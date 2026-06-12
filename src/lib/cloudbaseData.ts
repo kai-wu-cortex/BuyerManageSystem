@@ -77,10 +77,20 @@ export interface LedgerBackup {
   timeCreated: string;
   rawTime: number;
   size: number;
-  orders: PurchaseOrder[];
+  orders?: PurchaseOrder[];
   createdAt?: string; // ISO 8601, 给 MongoDB TTL 索引使用
+  orderCount?: number;
+  chunkCount?: number;
   /** 摘要模式 (listDocuments 带 sizeFields: ['orders']) 下返回，orders 不传，仅用于列表展示 */
   ordersCount?: number;
+}
+
+export interface LedgerBackupChunk {
+  id: string;
+  backupId: string;
+  chunkIndex: number;
+  orders: PurchaseOrder[];
+  createdAt?: string;
 }
 
 export type CollectionName =
@@ -88,10 +98,12 @@ export type CollectionName =
   | 'sample_records'
   | 'order_sticky_notes'
   | 'ledger_backups'
+  | 'ledger_backup_chunks'
   | 'buyer_system_view_settings'
   | 'noteboard_items';
 
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
+const LEDGER_BACKUP_CHUNK_MAX_BYTES = 500000;
 
 const viteCloudbaseEnv: ViteCloudbaseEnv = {
   VITE_CLOUDBASE_ENV_ID:
@@ -173,11 +185,22 @@ export function cleanUndefined<T>(value: T): T {
 }
 
 async function readJsonResponse<T>(response: Response, path: string): Promise<T> {
-  const payload = await response.json() as { success?: boolean; data?: T; message?: string; code?: string };
-  if (!response.ok || payload.success === false) {
-    throw new Error(`${path}: ${payload.message ?? payload.code ?? 'MongoDB API request failed'}`);
+  const text = await response.text();
+  let payload: { success?: boolean; data?: T; message?: string; code?: string } | null = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text) as { success?: boolean; data?: T; message?: string; code?: string };
+    } catch {
+      payload = null;
+    }
   }
-  return payload.data as T;
+  if (!response.ok || payload.success === false) {
+    const fallback = response.status === 413
+      ? '请求内容过大，请使用分片备份或减少单次上传数据量。'
+      : text || response.statusText || 'MongoDB API request failed';
+    throw new Error(`${path}: ${payload?.message ?? payload?.code ?? fallback}`);
+  }
+  return payload?.data as T;
 }
 
 function getDataApiPath(collectionName: CollectionName, documentId?: string): string {
@@ -455,21 +478,84 @@ export function prepareSampleForCloudbaseSync(sample: SampleRecord): SampleRecor
 }
 
 export async function saveLedgerBackup(orders: PurchaseOrder[]): Promise<LedgerBackup> {
-  const now = new Date();
+  const { backup, chunks } = createLedgerBackupDocuments(orders);
+  await runInChunks(chunks, chunk => setDocument('ledger_backup_chunks', chunk.id, chunk), 6);
+  await setDocument('ledger_backups', backup.id, backup);
+  return backup;
+}
+
+export function createLedgerBackupDocuments(
+  orders: PurchaseOrder[],
+  now = new Date(),
+  maxChunkBytes = LEDGER_BACKUP_CHUNK_MAX_BYTES,
+): { backup: LedgerBackup; chunks: LedgerBackupChunk[] } {
   const rawTime = now.getTime();
   const id = `ledger_backup_${rawTime}`;
+  const createdAt = now.toISOString();
+  const preparedOrders = cleanUndefined(orders);
+  const chunks: LedgerBackupChunk[] = [];
+  let currentOrders: PurchaseOrder[] = [];
+
+  const makeChunk = (chunkIndex: number, chunkOrders: PurchaseOrder[]): LedgerBackupChunk => ({
+    id: `${id}_chunk_${String(chunkIndex).padStart(4, '0')}`,
+    backupId: id,
+    chunkIndex,
+    orders: chunkOrders,
+    createdAt,
+  });
+
+  for (const order of preparedOrders) {
+    const candidate = [...currentOrders, order];
+    const candidateChunk = makeChunk(chunks.length, candidate);
+    const candidateSize = new Blob([JSON.stringify(candidateChunk)]).size;
+    if (currentOrders.length > 0 && candidateSize > maxChunkBytes) {
+      chunks.push(makeChunk(chunks.length, currentOrders));
+      currentOrders = [order];
+    } else {
+      currentOrders = candidate;
+    }
+  }
+
+  if (currentOrders.length > 0 || preparedOrders.length === 0) {
+    chunks.push(makeChunk(chunks.length, currentOrders));
+  }
+
   const backup: LedgerBackup = {
     id,
     name: `ledger_backup_${now.toISOString().split('T')[0]}_${now.toTimeString().split(' ')[0].replace(/:/g, '-')}`,
     timeCreated: now.toLocaleString('zh-CN', { hour12: false }),
     rawTime,
-    size: new Blob([JSON.stringify(orders)]).size,
-    orders,
-    createdAt: now.toISOString(),
+    size: new Blob([JSON.stringify(preparedOrders)]).size,
+    orderCount: preparedOrders.length,
+    chunkCount: chunks.length,
+    createdAt,
   };
 
-  await setDocument('ledger_backups', id, backup);
-  return backup;
+  return { backup, chunks };
+}
+
+export async function loadLedgerBackupOrders(backup: LedgerBackup): Promise<PurchaseOrder[] | null> {
+  if (Array.isArray(backup.orders)) {
+    return backup.orders;
+  }
+
+  const chunkCount = backup.chunkCount ?? 0;
+  if (chunkCount <= 0) {
+    return null;
+  }
+
+  const chunkPromises = Array.from({ length: chunkCount }, (_, index) => (
+    getDocument<LedgerBackupChunk>('ledger_backup_chunks', `${backup.id}_chunk_${String(index).padStart(4, '0')}`)
+  ));
+  const chunks = await Promise.all(chunkPromises);
+  if (chunks.some(chunk => !chunk || !Array.isArray(chunk.orders))) {
+    return null;
+  }
+
+  return chunks
+    .filter((chunk): chunk is LedgerBackupChunk => Boolean(chunk))
+    .sort((a, b) => a.chunkIndex - b.chunkIndex)
+    .flatMap(chunk => chunk.orders);
 }
 
 export function sortBackupsNewestFirst(backups: LedgerBackup[]): LedgerBackup[] {
@@ -502,5 +588,6 @@ export const cloudbaseCollections = {
   samples: 'sample_records',
   notes: 'order_sticky_notes',
   ledgerBackups: 'ledger_backups',
+  ledgerBackupChunks: 'ledger_backup_chunks',
   viewSettings: 'buyer_system_view_settings',
 } as const satisfies Record<string, CollectionName>;

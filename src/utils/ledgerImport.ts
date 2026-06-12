@@ -1,4 +1,4 @@
-const STANDARD_HEADERS = [
+export const STANDARD_HEADERS = [
   '单据编号',
   '单据日期',
   '供应商',
@@ -76,6 +76,16 @@ const HEADER_ALIASES: Record<string, readonly string[]> = {
   交货日期: ['交货日期', '协议交期', '到货日期'],
 };
 
+const REQUIRED_HEADERS = [
+  '单据编号',
+  '单据日期',
+  '供应商',
+  '商品编码',
+  '商品名称',
+  '数量',
+  '实际含税单价',
+] as const;
+
 function normalizeCell(cell: unknown): string {
   if (cell === null || cell === undefined) return '';
   if (cell instanceof Date) return cell.toISOString().split('T')[0];
@@ -115,11 +125,62 @@ function buildHeaderIndex(row: unknown[]): Map<string, number> {
   return index;
 }
 
+export interface LedgerHeaderAnalysis {
+  hasHeader: boolean;
+  recognizedHeaders: string[];
+  unknownHeaders: string[];
+  missingRequiredHeaders: string[];
+}
+
+export function analyzeLedgerHeaders(rows: unknown[][]): LedgerHeaderAnalysis {
+  const firstRow = rows[0] || [];
+  if (!isHeaderRow(firstRow)) {
+    return {
+      hasHeader: false,
+      recognizedHeaders: [],
+      unknownHeaders: [],
+      missingRequiredHeaders: [],
+    };
+  }
+
+  const recognizedHeaders: string[] = [];
+  const unknownHeaders: string[] = [];
+  const matchedStandardHeaders = new Set<string>();
+
+  firstRow.forEach(cell => {
+    const label = normalizeCell(cell);
+    if (!label) return;
+    const normalized = normalizeHeader(label);
+    const matchedHeader = STANDARD_HEADERS.find(header => {
+      const aliases = HEADER_ALIASES[header] || [header];
+      return aliases.some(alias => normalizeHeader(alias) === normalized);
+    });
+
+    if (matchedHeader) {
+      recognizedHeaders.push(label);
+      matchedStandardHeaders.add(matchedHeader);
+    } else {
+      unknownHeaders.push(label);
+    }
+  });
+
+  return {
+    hasHeader: true,
+    recognizedHeaders,
+    unknownHeaders,
+    missingRequiredHeaders: REQUIRED_HEADERS.filter(header => !matchedStandardHeaders.has(header)),
+  };
+}
+
 function formatRowAsLine(row: unknown[]): string {
   return row.map(normalizeCell).join('\t');
 }
 
-export function rowsToLedgerLines(rows: unknown[][]): string[] {
+interface RowsToLedgerLinesOptions {
+  ignoreUnknownHeaders?: boolean;
+}
+
+export function rowsToLedgerLines(rows: unknown[][], _options: RowsToLedgerLinesOptions = {}): string[] {
   if (rows.length === 0) return [];
   const firstRow = rows[0];
 

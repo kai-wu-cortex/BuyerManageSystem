@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rowsToLedgerLines } from './ledgerImport';
+import { analyzeLedgerHeaders, rowsToLedgerLines } from './ledgerImport';
 import { getFlatLedgerRows, parseClipboardLine } from './ledgerHelper';
 
 const rows = [
@@ -49,6 +49,42 @@ assert.equal(fields[12], '圆片实色混色 PET厚片', '商品名称 should st
 const parsed = parseClipboardLine(line);
 assert.equal(parsed?.po.supplier, '供应商A', 'supplier names containing 供应商 should not be treated as headers');
 assert.equal(parsed?.item.category, '亮片', 'parsed item category should come from 商品类别');
+
+const headerAnalysis = analyzeLedgerHeaders([
+  [
+    '单据编号',
+    '单据日期',
+    '供应商',
+    '商品编码',
+    '商品名称',
+    '数量',
+    '实际含税单价',
+    'ERP内部字段',
+  ],
+]);
+assert.equal(headerAnalysis.hasHeader, true);
+assert.deepEqual(headerAnalysis.unknownHeaders, ['ERP内部字段']);
+assert.deepEqual(headerAnalysis.missingRequiredHeaders, []);
+
+const missingHeaderAnalysis = analyzeLedgerHeaders([
+  ['单据编号', '单据日期', '供应商', '商品编码', '商品名称'],
+]);
+assert.deepEqual(missingHeaderAnalysis.missingRequiredHeaders, ['数量', '实际含税单价']);
+
+const cleanedLine = rowsToLedgerLines([
+  [
+    '单据编号',
+    '单据日期',
+    '供应商',
+    '商品编码',
+    '商品名称',
+    '数量',
+    '实际含税单价',
+    'ERP内部字段',
+  ],
+  ['CGDD-CLEAN-01', '2026-06-12', '供应商A', 'MAT-1', '物料1', 2, 3, '不应进入台账'],
+], { ignoreUnknownHeaders: true })[0];
+assert.equal(cleanedLine.includes('不应进入台账'), false, 'unknown uploaded columns should be removed when continuing import');
 
 const emptyFieldRows = [
   [

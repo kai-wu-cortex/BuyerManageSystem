@@ -2,7 +2,7 @@ import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POStatus, PurchaseExecutionStatus } from './types';
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { parseClipboardLine } from './utils/ledgerHelper';
-import { rowsToLedgerLines } from './utils/ledgerImport';
+import { analyzeLedgerHeaders, rowsToLedgerLines } from './utils/ledgerImport';
 import SystemLogin from './components/SystemLogin';
 import {
   Dashboard,
@@ -28,6 +28,7 @@ import {
   isLedgerBackupNewerThanLoaded,
   isCloudbaseConfigured,
   listDocuments,
+  loadLedgerBackupOrders,
   OperationType,
   prepareSampleForCloudbaseSync,
   replaceCollection,
@@ -690,6 +691,26 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
 
+  const validateLedgerRowsBeforeImport = (rows: unknown[][]): boolean => {
+    const analysis = analyzeLedgerHeaders(rows);
+    if (!analysis.hasHeader) return true;
+
+    if (analysis.missingRequiredHeaders.length > 0) {
+      alert(
+        `台账表头缺少核心字段，已暂停上传。\n\n缺少字段：\n${analysis.missingRequiredHeaders.map(field => `• ${field}`).join('\n')}`,
+      );
+      return false;
+    }
+
+    if (analysis.unknownHeaders.length > 0) {
+      return window.confirm(
+        `检测到上传台账中有系统不认识的字段：\n\n${analysis.unknownHeaders.map(field => `• ${field}`).join('\n')}\n\n选择“确定”将删除这些异常字段后继续上传；选择“取消”将暂停上传。`,
+      );
+    }
+
+    return true;
+  };
+
   const backupToCloudbase = async (orders: PurchaseOrder[]) => {
     if (!isCloudbaseConfigured()) {
       console.warn("CloudBase backup skipped because VITE_CLOUDBASE_ENV_ID is not configured.");
@@ -755,6 +776,10 @@ export default function App() {
           finalRows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1 });
         }
 
+        if (!validateLedgerRowsBeforeImport(finalRows)) {
+          return;
+        }
+
         const lines = rowsToLedgerLines(finalRows);
 
         // Process lines into purchase orders using the parsed ledger helpers
@@ -817,8 +842,8 @@ export default function App() {
           if (!poMap[poId]) {
             poMap[poId] = {
               ...parsed.po,
-              executionStatus: parsed.po.executionStatus || "未执行",
-              inboundStatus: parsed.po.inboundStatus || "未入库",
+              executionStatus: parsed.po.executionStatus ?? "未执行",
+              inboundStatus: parsed.po.inboundStatus ?? "未入库",
               items: [parsed.item as OrderItem]
             } as PurchaseOrder;
           } else {
@@ -897,26 +922,27 @@ export default function App() {
   const handleSelectHistoryBackup = async (backup: typeof historyBackups[0]) => {
     setIsUploading(true);
     try {
-      // 摘要列表只带 ordersCount，没有 orders，这里按需拉完整文档
-      let parsedOrders: PurchaseOrder[] | undefined = backup.orders;
-      if (!Array.isArray(parsedOrders)) {
+      // 旧备份直接带 orders；新备份只带 metadata，需要按 chunk 读取完整订单
+      let backupToLoad = backup;
+      if (!Array.isArray(backupToLoad.orders) && !backupToLoad.chunkCount) {
         const full = await getDocument<LedgerBackup>(cloudbaseCollections.ledgerBackups, backup.id);
-        parsedOrders = full?.orders;
+        if (full) backupToLoad = full;
       }
+      const parsedOrders = await loadLedgerBackupOrders(backupToLoad);
       if (Array.isArray(parsedOrders)) {
         const { merged, stats } = mergePurchaseOrdersById(purchaseOrders, parsedOrders);
         handleUpdateOrders(merged);
-        markLedgerBackupLoaded(backup.rawTime);
+        markLedgerBackupLoaded(backupToLoad.rawTime);
         setLatestRemoteLedgerBackup(current => {
-          if (current && current.rawTime >= backup.rawTime) {
+          if (current && current.rawTime >= backupToLoad.rawTime) {
             return current;
           }
-          return backup;
+          return backupToLoad;
         });
 
         // Show success reminder via animated toast notice
         setSuccessToast(
-          `🎉 已合并历史台账 [${backup.timeCreated}]：新增 ${stats.added} / 更新 ${stats.updated} / 保留 ${stats.retained}，共 ${merged.length} 笔`,
+          `🎉 已合并历史台账 [${backupToLoad.timeCreated}]：新增 ${stats.added} / 更新 ${stats.updated} / 保留 ${stats.retained}，共 ${merged.length} 笔`,
         );
 
         setIsHistoryModalOpen(false);

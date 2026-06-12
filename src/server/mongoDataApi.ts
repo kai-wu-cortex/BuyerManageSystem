@@ -7,6 +7,7 @@ const ALLOWED_COLLECTIONS = new Set([
   'sample_records',
   'order_sticky_notes',
   'ledger_backups',
+  'ledger_backup_chunks',
   'buyer_system_view_settings',
   'noteboard_items',
 ]);
@@ -215,4 +216,3 @@ export async function handleMongoDocumentRequest(req: ApiRequest, res: ApiRespon
   res.setHeader('Allow', 'GET, PUT, DELETE');
   return sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Only GET, PUT and DELETE are supported.');
 }
-
