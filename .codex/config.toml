@@ -1,0 +1,9 @@
+personality = "friendly"
+
+[mcp_servers]
+
+[mcp_servers.mongodb]
+enabled = false
+command = "npx"
+args = ["-y", "mongodb-mcp-server@latest"]
+env_vars = ["MDB_MCP_CONNECTION_STRING"]

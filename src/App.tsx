@@ -1,16 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POStatus, PurchaseExecutionStatus } from './types';
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { parseClipboardLine } from './utils/ledgerHelper';
-import { SUPPLIER_MATERIAL_MAPPING } from './components/POList';
-import Dashboard from './components/Dashboard';
-import POList from './components/POList';
-import SampleTracker from './components/SampleTracker';
-import SkeuomorphicNotes from './components/SkeuomorphicNotes';
 import SystemLogin from './components/SystemLogin';
-import NoteboardCanvas from './components/NoteboardCanvas';
-import SupplierSummaryApp from './components/SupplierSummaryApp';
+import {
+  Dashboard,
+  NoteboardCanvas,
+  POList,
+  SampleTracker,
+  SkeuomorphicNotes,
+  SupplierSummaryApp,
+  preloadAppModule,
+  type AppTab,
+} from './appModules';
+import { SUPPLIER_MATERIAL_MAPPING } from './utils/supplierMaterialMapping';
 import { useStarredPOs } from './lib/hooks';
 import {
   clearCloudbaseCollections,
@@ -53,8 +56,6 @@ import {
   Loader2,
   LogOut,
 } from 'lucide-react';
-
-type AppTab = 'dashboard' | 'ledger' | 'inventory' | 'notes' | 'noteboard' | 'supplier-summary';
 type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
 const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
@@ -68,6 +69,29 @@ const miniAppTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
   { id: 'noteboard', label: '便签画板', icon: <LayoutGrid className="w-5 h-5 shrink-0" /> },
   { id: 'supplier-summary', label: '供应商汇总', icon: <Briefcase className="w-5 h-5 shrink-0" /> },
 ];
+
+const MODULE_FALLBACK_LABELS: Record<AppTab, string> = {
+  dashboard: '采购物料大屏',
+  ledger: '采购单台账',
+  inventory: '样品获取与打样追踪',
+  notes: '订单便签与流转',
+  noteboard: '便签画板',
+  'supplier-summary': '供应商汇总',
+};
+
+function ModuleLoadingFallback({ label }: { label: string }) {
+  return (
+    <div className="min-h-[55vh] flex items-center justify-center">
+      <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm flex items-center gap-3">
+        <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+        <div>
+          <p className="text-xs font-black text-slate-800">正在加载模块</p>
+          <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{label}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -230,10 +254,17 @@ export default function App() {
   const mainScrollRef = useRef<HTMLElement>(null);
   const tabScrollPositions = useRef<Record<string, number>>({});
 
+  const handleModuleIntent = (tabId: AppTab) => {
+    void preloadAppModule(tabId).catch(error => {
+      console.warn(`Failed to preload ${tabId} module:`, error);
+    });
+  };
+
   const handleTabChange = (newTab: AppTab) => {
     if (mainScrollRef.current) {
       tabScrollPositions.current[activeTab] = mainScrollRef.current.scrollTop;
     }
+    handleModuleIntent(newTab);
     setActiveTab(newTab);
   };
 
@@ -1128,15 +1159,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F1F5F9] flex flex-col font-sans text-slate-900 selection:bg-blue-100">
       
-      {/* Animated custom Toast feedback */}
-      <AnimatePresence>
-        {successToast && (
-          <motion.div
-            initial={{ opacity: 0, y: -20, x: "-50%" }}
-            animate={{ opacity: 1, y: 0, x: "-50%" }}
-            exit={{ opacity: 0, y: -20, x: "-50%" }}
-            className="fixed top-6 left-1/2 z-[9999] bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border border-emerald-500/35 max-w-md w-full sm:w-auto"
-          >
+      {/* Lightweight toast feedback kept in the app shell without loading the animation library. */}
+      {successToast && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border border-emerald-500/35 max-w-md w-full sm:w-auto">
             <div className="flex items-center justify-center bg-white/20 p-2 rounded-xl shrink-0">
               <ShieldCheck className="w-5 h-5 text-white" />
             </div>
@@ -1149,9 +1174,8 @@ export default function App() {
             >
               <X className="w-4 h-4" />
             </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
 
       <div className="w-full max-w-[1600px] mx-auto min-h-screen lg:h-screen lg:overflow-hidden flex flex-col lg:flex-row bg-[#F1F5F9]">
         
@@ -1205,6 +1229,8 @@ export default function App() {
               return (
                 <button
                   key={tab.id}
+                  onMouseEnter={() => handleModuleIntent(tab.id)}
+                  onFocus={() => handleModuleIntent(tab.id)}
                   onClick={() => {
                     handleTabChange(tab.id);
                     setIsSidebarOpen(false);
@@ -1248,6 +1274,8 @@ export default function App() {
               return (
                 <button
                   key={tab.id}
+                  onMouseEnter={() => handleModuleIntent(tab.id)}
+                  onFocus={() => handleModuleIntent(tab.id)}
                   onClick={() => {
                     handleTabChange(tab.id);
                     setIsSidebarOpen(false);
@@ -1383,90 +1411,92 @@ export default function App() {
 
           {/* Central content container */}
           <main ref={mainScrollRef} className="flex-1 p-3 md:p-4 overflow-y-auto bg-[#F8FAFC]">
-            {activeTab === 'noteboard' ? (
-              <NoteboardCanvas authUser={authUser} />
-            ) : activeTab === 'supplier-summary' ? (
-              <SupplierSummaryApp purchaseOrders={purchaseOrders} />
-            ) : purchaseOrders.length === 0 ? (
-              <POList
-                purchaseOrders={purchaseOrders}
-                onReplaceOrders={handleUpdateOrders}
-                authUser={authUser}
-                onNavigateToNotes={(poId, autoAdd = false) => {
-                  if (autoAdd) {
-                    setAutoAddNotePOId(poId);
-                  } else {
-                    setAutoAddNotePOId(null);
-                  }
-                  setTargetSearchTerm(poId);
-                  handleTabChange('notes');
-                }}
-                notes={notes}
-              />
-            ) : (
-              <>
-                <div className={activeTab === 'dashboard' ? 'block' : 'hidden'}>
-                  <Dashboard 
-                    purchaseOrders={purchaseOrders} 
-                    inventory={inventory}
-                    authUser={authUser}
-                    onNavigateToPOS={(poId?: string) => {
-                      if (poId) setTargetSearchTerm(poId);
-                      handleTabChange('ledger');
-                    }}
-                    onNavigateToMaterials={() => handleTabChange('inventory')}
-                    onGenerateQuickPO={handleGenerateQuickPO}
-                  />
-                </div>
+            <Suspense fallback={<ModuleLoadingFallback label={MODULE_FALLBACK_LABELS[activeTab]} />}>
+              {activeTab === 'noteboard' ? (
+                <NoteboardCanvas authUser={authUser} />
+              ) : activeTab === 'supplier-summary' ? (
+                <SupplierSummaryApp purchaseOrders={purchaseOrders} />
+              ) : purchaseOrders.length === 0 ? (
+                <POList
+                  purchaseOrders={purchaseOrders}
+                  onReplaceOrders={handleUpdateOrders}
+                  authUser={authUser}
+                  onNavigateToNotes={(poId, autoAdd = false) => {
+                    if (autoAdd) {
+                      setAutoAddNotePOId(poId);
+                    } else {
+                      setAutoAddNotePOId(null);
+                    }
+                    setTargetSearchTerm(poId);
+                    handleTabChange('notes');
+                  }}
+                  notes={notes}
+                />
+              ) : (
+                <>
+                  {activeTab === 'dashboard' && (
+                    <Dashboard
+                      purchaseOrders={purchaseOrders}
+                      inventory={inventory}
+                      authUser={authUser}
+                      onNavigateToPOS={(poId?: string) => {
+                        if (poId) setTargetSearchTerm(poId);
+                        handleTabChange('ledger');
+                      }}
+                      onNavigateToMaterials={() => handleTabChange('inventory')}
+                      onGenerateQuickPO={handleGenerateQuickPO}
+                    />
+                  )}
 
-                <div className={activeTab === 'ledger' ? 'block' : 'hidden'}>
-                  <POList 
-                    purchaseOrders={purchaseOrders}
-                    onReplaceOrders={handleUpdateOrders}
-                    authUser={authUser}
-                    targetSearchTerm={targetSearchTerm}
-                    onClearTargetSearchTerm={() => setTargetSearchTerm('')}
-                    onNavigateToNotes={(poId, autoAdd = false) => {
-                      if (autoAdd) {
-                        setAutoAddNotePOId(poId);
-                      } else {
-                        setAutoAddNotePOId(null);
-                      }
-                      setTargetSearchTerm(poId);
-                      handleTabChange('notes');
-                    }}
-                    notes={notes}
-                  />
-                </div>
+                  {activeTab === 'ledger' && (
+                    <POList
+                      purchaseOrders={purchaseOrders}
+                      onReplaceOrders={handleUpdateOrders}
+                      authUser={authUser}
+                      targetSearchTerm={targetSearchTerm}
+                      onClearTargetSearchTerm={() => setTargetSearchTerm('')}
+                      onNavigateToNotes={(poId, autoAdd = false) => {
+                        if (autoAdd) {
+                          setAutoAddNotePOId(poId);
+                        } else {
+                          setAutoAddNotePOId(null);
+                        }
+                        setTargetSearchTerm(poId);
+                        handleTabChange('notes');
+                      }}
+                      notes={notes}
+                    />
+                  )}
 
-                <div className={activeTab === 'inventory' ? 'block' : 'hidden'}>
-                  <SampleTracker 
-                    purchaseOrders={purchaseOrders}
-                    onNavigateToPOS={(poId?: string) => {
-                      if (poId) setTargetSearchTerm(poId);
-                      handleTabChange('ledger');
-                    }}
-                    samples={samples}
-                    onSamplesChange={handleUpdateSamples}
-                  />
-                </div>
+                  {activeTab === 'inventory' && (
+                    <SampleTracker
+                      purchaseOrders={purchaseOrders}
+                      onNavigateToPOS={(poId?: string) => {
+                        if (poId) setTargetSearchTerm(poId);
+                        handleTabChange('ledger');
+                      }}
+                      samples={samples}
+                      onSamplesChange={handleUpdateSamples}
+                    />
+                  )}
 
-                <div className={activeTab === 'notes' ? 'block' : 'hidden'}>
-                  <SkeuomorphicNotes 
-                    purchaseOrders={purchaseOrders}
-                    activePOId={targetSearchTerm || null}
-                    onNavigateToPO={(poId) => {
-                      setTargetSearchTerm(poId);
-                      handleTabChange('ledger');
-                    }}
-                    autoAddNote={autoAddNotePOId}
-                    onClearAutoAddNote={() => setAutoAddNotePOId(null)}
-                    notes={notes}
-                    onNotesChange={handleUpdateNotes}
-                  />
-                </div>
-              </>
-            )}
+                  {activeTab === 'notes' && (
+                    <SkeuomorphicNotes
+                      purchaseOrders={purchaseOrders}
+                      activePOId={targetSearchTerm || null}
+                      onNavigateToPO={(poId) => {
+                        setTargetSearchTerm(poId);
+                        handleTabChange('ledger');
+                      }}
+                      autoAddNote={autoAddNotePOId}
+                      onClearAutoAddNote={() => setAutoAddNotePOId(null)}
+                      notes={notes}
+                      onNotesChange={handleUpdateNotes}
+                    />
+                  )}
+                </>
+              )}
+            </Suspense>
           </main>
 
 

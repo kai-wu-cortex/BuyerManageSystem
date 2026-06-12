@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Star } from 'lucide-react';
 import { PurchaseOrder } from '../types';
 import { FlatLedgerRow } from '../utils/ledgerHelper';
@@ -40,6 +40,12 @@ function renderValue(field: keyof FlatLedgerRow, value: unknown): string {
   return String(value);
 }
 
+/** PO 维度的轻量聚合：id → {itemCount, totalAmount}，O(N) 一次性算好 */
+interface POAggregate {
+  itemCount: number;
+  totalAmount: number;
+}
+
 export default function POCardView({
   mode,
   rows,
@@ -51,6 +57,19 @@ export default function POCardView({
   fieldNames,
   groupBy,
 }: POCardViewProps) {
+  // PO 聚合：O(N) 预计算 itemCount / totalAmount, 卡片 O(1) 查表
+  const poAggregateMap = useMemo(() => {
+    const map = new Map<string, POAggregate>();
+    for (const po of purchaseOrders) {
+      let totalAmount = 0;
+      for (const item of po.items) {
+        totalAmount += item.orderedQty * item.price;
+      }
+      map.set(po.id, { itemCount: po.items.length, totalAmount });
+    }
+    return map;
+  }, [purchaseOrders]);
+
   // mode === 'po-card' 时，把同一 PO 的多行折叠为 1 张卡片
   const cards = useMemo(() => {
     if (mode === 'item-card') return rows;
@@ -85,24 +104,31 @@ export default function POCardView({
     return groupList;
   }, [cards, groupBy]);
 
+  // po-card 模式预过滤一次字段，避免每张卡片都过滤一遍
+  const effectiveFields = useMemo(() => {
+    return visibleFields.filter(field => {
+      if (field === 'id') return false;
+      if (mode === 'po-card') return PO_LEVEL_FIELDS.has(field);
+      return true;
+    });
+  }, [visibleFields, mode]);
+
   return (
     <div className="space-y-3">
-      {grouped.map(group => {
-        return (
-          <CardGroup
-            key={group.key}
-            group={group}
-            mode={mode}
-            purchaseOrders={purchaseOrders}
-            starredIds={starredIds}
-            onToggleStar={onToggleStar}
-            onCardClick={onCardClick}
-            visibleFields={visibleFields}
-            fieldNames={fieldNames}
-            showHeader={groupBy !== null}
-          />
-        );
-      })}
+      {grouped.map(group => (
+        <CardGroup
+          key={group.key}
+          group={group}
+          mode={mode}
+          poAggregateMap={poAggregateMap}
+          starredIds={starredIds}
+          onToggleStar={onToggleStar}
+          onCardClick={onCardClick}
+          effectiveFields={effectiveFields}
+          fieldNames={fieldNames}
+          showHeader={groupBy !== null}
+        />
+      ))}
       {grouped.every(group => group.items.length === 0) && (
         <div className="bg-white border border-dashed border-slate-200 rounded-xl p-12 text-center text-slate-400 text-xs font-sans">
           🚨 当前筛选条件下没有匹配的台账
@@ -115,28 +141,60 @@ export default function POCardView({
 interface CardGroupProps {
   group: { key: string; label: string; items: FlatLedgerRow[] };
   mode: CardViewMode;
-  purchaseOrders: PurchaseOrder[];
+  poAggregateMap: Map<string, POAggregate>;
   starredIds: Set<string>;
   onToggleStar?: (id: string) => void;
   onCardClick: (poId: string) => void;
-  visibleFields: (keyof FlatLedgerRow)[];
+  effectiveFields: (keyof FlatLedgerRow)[];
   fieldNames: Record<string, string>;
   showHeader: boolean;
   key?: string;
 }
 
+const INITIAL_VISIBLE = 60;
+const LOAD_MORE_STEP = 60;
+
 function CardGroup({
   group,
   mode,
-  purchaseOrders,
+  poAggregateMap,
   starredIds,
   onToggleStar,
   onCardClick,
-  visibleFields,
+  effectiveFields,
   fieldNames,
   showHeader,
 }: CardGroupProps) {
   const [open, setOpen] = useState(true);
+  // 增量渲染：先显示 60 张，滚动到底加载更多
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // 卡片数 / 数据变化时重置 visibleCount
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE);
+  }, [group.items, open]);
+
+  // IntersectionObserver: 哨兵进视图就加载下一批
+  useEffect(() => {
+    if (!open) return;
+    const node = sentinelRef.current;
+    if (!node) return;
+    if (visibleCount >= group.items.length) return;
+
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setVisibleCount(prev => Math.min(group.items.length, prev + LOAD_MORE_STEP));
+        }
+      },
+      { rootMargin: '400px 0px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [open, visibleCount, group.items.length]);
+
+  const visibleItems = useMemo(() => group.items.slice(0, visibleCount), [group.items, visibleCount]);
 
   return (
     <div>
@@ -155,21 +213,28 @@ function CardGroup({
       )}
 
       {open && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {group.items.map((row, idx) => (
-            <PurchaseCard
-              key={`${row.id}-${row.code}-${idx}`}
-              row={row}
-              mode={mode}
-              purchaseOrders={purchaseOrders}
-              starredIds={starredIds}
-              onToggleStar={onToggleStar}
-              onCardClick={onCardClick}
-              visibleFields={visibleFields}
-              fieldNames={fieldNames}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {visibleItems.map((row, idx) => (
+              <PurchaseCard
+                key={`${row.id}-${row.code}-${idx}`}
+                row={row}
+                mode={mode}
+                aggregate={poAggregateMap.get(row.id)}
+                isStarred={starredIds.has(row.id)}
+                onToggleStar={onToggleStar}
+                onCardClick={onCardClick}
+                effectiveFields={effectiveFields}
+                fieldNames={fieldNames}
+              />
+            ))}
+          </div>
+          {visibleCount < group.items.length && (
+            <div ref={sentinelRef} className="py-6 text-center text-[11px] text-slate-400 font-mono">
+              滚动加载更多… ({visibleCount} / {group.items.length})
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -178,38 +243,27 @@ function CardGroup({
 interface PurchaseCardProps {
   row: FlatLedgerRow;
   mode: CardViewMode;
-  purchaseOrders: PurchaseOrder[];
-  starredIds: Set<string>;
+  aggregate: POAggregate | undefined;
+  isStarred: boolean;
   onToggleStar?: (id: string) => void;
   onCardClick: (poId: string) => void;
-  visibleFields: (keyof FlatLedgerRow)[];
+  effectiveFields: (keyof FlatLedgerRow)[];
   fieldNames: Record<string, string>;
   key?: string;
 }
 
-function PurchaseCard({
+const PurchaseCard = memo(function PurchaseCard({
   row,
   mode,
-  purchaseOrders,
-  starredIds,
+  aggregate,
+  isStarred,
   onToggleStar,
   onCardClick,
-  visibleFields,
+  effectiveFields,
   fieldNames,
 }: PurchaseCardProps) {
-  const isStarred = starredIds.has(row.id);
-  const po = useMemo(() => purchaseOrders.find(p => p.id === row.id) ?? null, [purchaseOrders, row.id]);
-  const itemCount = po?.items.length ?? 0;
-  const totalAmount = po ? po.items.reduce((sum, item) => sum + item.orderedQty * item.price, 0) : 0;
-
-  // po-card 模式下只显示 PO 级别字段；item-card 模式下两类字段都显示
-  const fields = useMemo(() => {
-    return visibleFields.filter(field => {
-      if (field === 'id') return false; // 已显示在标题
-      if (mode === 'po-card') return PO_LEVEL_FIELDS.has(field);
-      return true;
-    });
-  }, [visibleFields, mode]);
+  const itemCount = aggregate?.itemCount ?? 0;
+  const totalAmount = aggregate?.totalAmount ?? 0;
 
   return (
     <div
@@ -275,10 +329,10 @@ function PurchaseCard({
 
       {/* Field grid */}
       <div className="px-4 py-3 space-y-1.5 text-[11px] flex-1">
-        {fields.length === 0 ? (
+        {effectiveFields.length === 0 ? (
           <p className="text-[10px] text-slate-400 font-mono">在「字段配置」中开启字段以显示更多信息</p>
         ) : (
-          fields.map(field => {
+          effectiveFields.map(field => {
             const value = row[field];
             if (value === undefined || value === null || value === '') return null;
             const label = fieldNames[field] ?? String(field);
@@ -295,4 +349,4 @@ function PurchaseCard({
       </div>
     </div>
   );
-}
+});

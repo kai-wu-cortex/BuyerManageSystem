@@ -501,7 +501,7 @@ export default function Dashboard({
             <p className="text-[10px] font-mono text-slate-500 uppercase">月度总计开销走势</p>
           </div>
           <div className="h-64 mt-4 w-full">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <LineChart data={monthlySpend} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748B' }} dy={10} />
@@ -527,7 +527,7 @@ export default function Dashboard({
             <p className="text-[10px] font-mono text-slate-500 uppercase">依采购规模排序前5名</p>
           </div>
           <div className="h-64 mt-4 w-full">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <BarChart data={supplierSpend} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E2E8F0" />
                 <XAxis type="number" hide />
@@ -557,7 +557,7 @@ export default function Dashboard({
             <p className="text-[10px] font-mono text-slate-500 uppercase">投入资金的物料结构</p>
           </div>
           <div className="h-64 mt-4 w-full relative">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <PieChart>
                 <Pie
                   data={categorySpend}

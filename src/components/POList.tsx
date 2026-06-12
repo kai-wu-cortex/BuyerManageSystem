@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PurchaseOrder, POStatus, PurchaseExecutionStatus, InboundStatus, OrderItem } from '../types';
 import { getFlatLedgerRows, FlatLedgerRow, parseClipboardLine } from '../utils/ledgerHelper';
+import { getLedgerRowsForView } from '../utils/ledgerView';
+import { SUPPLIER_MATERIAL_MAPPING } from '../utils/supplierMaterialMapping';
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -109,17 +111,6 @@ function sanitizeColumnWidths(value: unknown, defaultWidths: Record<string, numb
   }
   return next;
 }
-
-// Supplier typical material fallback
-export const SUPPLIER_MATERIAL_MAPPING: Record<string, Partial<OrderItem>> = {
-  "广东邦固化学科技有限公司": { code: "NHJBHG7501", name: "粘合剂BHG-20KG/件", spec: "20KG/件", category: "包装物", unit: "KG", price: 50.00 },
-  "厦门联盛智能包装科技有限公司": { code: "PBQRFID741", name: "沃尔玛RFID", spec: "7.4*1.8CM", category: "标签", unit: "PCS", price: 0.23 },
-  "广州市新稀冶金化工有限公司": { code: "HXCXHCGSI", name: "活性超细合成铝", spec: "SHGL-101-4", category: "原材料", unit: "KG", price: 22.50 },
-  "深圳祥泰兴包装制品有限公司": { code: "RFHDFZX15", name: "复合袋 仿真雪", spec: "10*15+4CM 7c", category: "袋子", unit: "PCS", price: 0.165 },
-  "东莞市凌宇颜料有限公司": { code: "RLY12000400", name: "LY120/110", spec: "100目", category: "珠光粉", unit: "KG", price: 27.00 },
-  "致业": { code: "WLSM", name: "拉伸膜", spec: "1000m,五卷", category: "原材料", unit: "卷", price: 24.1667 },
-  "东莞市丰彩新材料有限公司": { code: "XSJ102165", name: "102#稀释剂", spec: "1*165", category: "原材料", unit: "KG", price: 8.80 }
-};
 
 // Row height class generator
 const getRowPaddingClass = (rowHeight: 'compact' | 'medium' | 'relaxed') => {
@@ -1071,38 +1062,9 @@ export default function POList({
     });
   }, [rawLedgerRows, searchTerm, statusFilter, execFilter, inboundFilter, supplierFilter, dateStartFilter, dateEndFilter, showStarredOnly, starredIds]);
 
-  const sortedLedgerRows = useMemo(() => {
-    const sorted = [...filteredLedgerRows].sort((a, b) => {
-      let aVal = a[sheetSortField];
-      let bVal = b[sheetSortField];
-
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return sheetSortOrder === 'asc' ? aVal - bVal : bVal - aVal;
-      }
-
-      const aStr = String(aVal || '').toLowerCase();
-      const bStr = String(bVal || '').toLowerCase();
-
-      if (aStr < bStr) return sheetSortOrder === 'asc' ? -1 : 1;
-      if (aStr > bStr) return sheetSortOrder === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    let currentGroupId = 0;
-    let lastId: string | null = null;
-    return sorted.map((row) => {
-      if (row.id !== lastId) {
-        if (lastId !== null) {
-          currentGroupId = (currentGroupId + 1) % 2;
-        }
-        lastId = row.id;
-      }
-      return {
-        ...row,
-        _bgGroup: currentGroupId
-      };
-    });
-  }, [filteredLedgerRows, sheetSortField, sheetSortOrder]);
+  const displayLedgerRows = useMemo(() => {
+    return getLedgerRowsForView(filteredLedgerRows, viewMode, sheetSortField, sheetSortOrder);
+  }, [filteredLedgerRows, viewMode, sheetSortField, sheetSortOrder]);
 
   // Reset scroll viewport on search/filter/sort/data changes
   // 加载新台账后 purchaseOrders 引用变了 (即使长度相同, 内容也可能变)
@@ -1114,9 +1076,16 @@ export default function POList({
     setScrollTop(0);
   }, [searchTerm, statusFilter, execFilter, inboundFilter, sheetSortField, sheetSortOrder, purchaseOrders]);
 
-  const totalAmountSum = sortedLedgerRows.reduce((sum, row) => sum + (row.orderedQty * row.price), 0);
-  const totalQtySum = sortedLedgerRows.reduce((sum, row) => sum + row.orderedQty, 0);
-  const totalTaxSum = sortedLedgerRows.reduce((sum, row) => sum + (row.taxAmount || 0), 0);
+  const ledgerTotals = useMemo(() => {
+    return filteredLedgerRows.reduce(
+      (totals, row) => ({
+        amount: totals.amount + (row.orderedQty * row.price),
+        quantity: totals.quantity + row.orderedQty,
+        tax: totals.tax + (row.taxAmount || 0),
+      }),
+      { amount: 0, quantity: 0, tax: 0 },
+    );
+  }, [filteredLedgerRows]);
 
   // Compute active loaded data date range for indicator - ignore non-date header leakages
   const dates = purchaseOrders
@@ -1446,10 +1415,10 @@ export default function POList({
         )}
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-slate-100 text-[11px] font-mono text-slate-500">
-          <div>筛选匹配分录数: <span className="text-slate-800 font-bold font-sans">{sortedLedgerRows.length} 行 (Rows)</span></div>
-          <div>计划订购总件数: <span className="text-slate-800 font-bold font-sans">{totalQtySum.toLocaleString()} 件</span></div>
-          <div>估算契税累加额: <span className="text-slate-800 font-bold font-sans">¥{totalTaxSum.toLocaleString()}</span></div>
-          <div>含税订购价总计: <span className="text-emerald-600 font-bold font-sans">¥{totalAmountSum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
+          <div>筛选匹配分录数: <span className="text-slate-800 font-bold font-sans">{filteredLedgerRows.length} 行 (Rows)</span></div>
+          <div>计划订购总件数: <span className="text-slate-800 font-bold font-sans">{ledgerTotals.quantity.toLocaleString()} 件</span></div>
+          <div>估算契税累加额: <span className="text-slate-800 font-bold font-sans">¥{ledgerTotals.tax.toLocaleString()}</span></div>
+          <div>含税订购价总计: <span className="text-emerald-600 font-bold font-sans">¥{ledgerTotals.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
         </div>
       </div>
 
@@ -1505,7 +1474,7 @@ export default function POList({
         <div className="bg-white border border-slate-200 rounded-xl shadow-md p-4">
           <POCardView
             mode={viewMode}
-            rows={sortedLedgerRows}
+            rows={displayLedgerRows}
             purchaseOrders={purchaseOrders}
             starredIds={starredIds}
             onToggleStar={toggleStar}
@@ -1533,14 +1502,14 @@ export default function POList({
               relaxed: 54
             };
             const singleRowHeight = rowHeights[rowHeight];
-            const totalRows = sortedLedgerRows.length;
+            const totalRows = displayLedgerRows.length;
 
             // Viewport calculation with 8 row padding buffer
             // 读取实际容器高度, 避免与硬编码不一致
             const viewportHeight = scrollContainerRef.current?.clientHeight ?? 640;
             const startIndex = Math.max(0, Math.floor(scrollTop / singleRowHeight) - 8);
             const endIndex = Math.min(totalRows, Math.ceil((scrollTop + viewportHeight) / singleRowHeight) + 8);
-            const visibleRows = sortedLedgerRows.slice(startIndex, endIndex);
+            const visibleRows = displayLedgerRows.slice(startIndex, endIndex);
 
             return (
               <table
