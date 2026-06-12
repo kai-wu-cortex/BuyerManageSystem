@@ -309,7 +309,7 @@ const renderCellContent = (
     case 'lastInboundDate':
       return <span className="text-slate-500 block font-mono">{row.lastInboundDate || '未开始'}</span>;
     case 'customerName':
-      return <span className="text-slate-700 font-sans font-semibold block">{row.customerName || '烫金事业部'}</span>;
+      return <span className="text-slate-700 font-sans font-semibold block">{row.customerName ?? ''}</span>;
     case 'sourceOrderId':
       return <span className="font-mono text-slate-500 block">{row.sourceOrderId || '无自提源'}</span>;
     case 'transportMethod':

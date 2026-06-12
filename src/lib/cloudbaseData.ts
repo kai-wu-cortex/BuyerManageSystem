@@ -208,6 +208,10 @@ function getDataApiPath(collectionName: CollectionName, documentId?: string): st
   return documentId ? `${basePath}/${encodeURIComponent(normalizeCloudbaseDocumentId(documentId))}` : basePath;
 }
 
+function isBrowserOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
 async function runInChunks<T>(
   items: T[],
   worker: (item: T) => Promise<void>,
@@ -436,6 +440,9 @@ export async function clearCloudbaseCollections(collectionNames: CollectionName[
 export async function loadBuyerSystemViewSettings(
   user: CloudbaseAuthUser,
 ): Promise<BuyerSystemViewSettingsRecord | null> {
+  if (isBrowserOffline()) {
+    return null;
+  }
   return getDocument<BuyerSystemViewSettingsRecord>(
     'buyer_system_view_settings',
     getBuyerSystemViewSettingsDocumentId(user),
@@ -447,6 +454,9 @@ export async function saveBuyerSystemViewSettings(
   scope: BuyerSystemViewSettingsScope,
   settings: Partial<DashboardViewSettings> | Partial<LedgerViewSettings>,
 ): Promise<void> {
+  if (isBrowserOffline()) {
+    return;
+  }
   const existing = await loadBuyerSystemViewSettings(user);
   const nextRecord: BuyerSystemViewSettingsRecord = {
     ...existing,

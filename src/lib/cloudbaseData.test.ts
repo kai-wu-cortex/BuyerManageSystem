@@ -8,6 +8,7 @@ import {
   getBuyerSystemViewSettingsDocumentId,
   getLatestLedgerBackup,
   isLedgerBackupNewerThanLoaded,
+  loadBuyerSystemViewSettings,
   normalizeCloudbaseDocumentId,
   normalizeCloudbaseUsername,
   setDocument,
@@ -125,6 +126,23 @@ assert.deepEqual(
     updatedAt: '2026-06-08T10:00:00.000Z',
   },
 );
+
+const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: { onLine: false },
+});
+const fetchBeforeOfflineViewSettings = globalThis.fetch;
+globalThis.fetch = (async () => {
+  throw new Error('fetch should not be called while offline');
+}) as typeof fetch;
+assert.equal(await loadBuyerSystemViewSettings(viewSettingsUser), null);
+globalThis.fetch = fetchBeforeOfflineViewSettings;
+if (originalNavigator) {
+  Object.defineProperty(globalThis, 'navigator', originalNavigator);
+} else {
+  delete (globalThis as typeof globalThis & { navigator?: Navigator }).navigator;
+}
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = (async () => new Response('Request Entity Too Large', { status: 413, statusText: 'Content Too Large' })) as typeof fetch;
