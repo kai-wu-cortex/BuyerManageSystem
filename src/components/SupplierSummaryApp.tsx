@@ -56,15 +56,16 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
       const key = item.code || item.name;
       let mat = bucket.materialMap.get(key);
       if (!mat) {
+        const price = Number(item.price) || 0;
         mat = {
           code: item.code,
           name: item.name,
           spec: item.spec,
           unit: item.unit,
-          lastPrice: item.price,
-          minPrice: item.price,
-          maxPrice: item.price,
-          avgPrice: item.price,
+          lastPrice: price,
+          minPrice: price,
+          maxPrice: price,
+          avgPrice: price,
           totalQty: 0,
           orderCount: 0,
           lastDate: po.date,
@@ -72,15 +73,16 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
         };
         bucket.materialMap.set(key, mat);
       }
-      mat.totalQty += item.orderedQty;
+      mat.totalQty += Number(item.orderedQty) || 0;
       mat.orderCount += 1;
-      mat.minPrice = Math.min(mat.minPrice, item.price);
-      mat.maxPrice = Math.max(mat.maxPrice, item.price);
+      const itemPrice = Number(item.price) || 0;
+      mat.minPrice = Math.min(mat.minPrice, itemPrice);
+      mat.maxPrice = Math.max(mat.maxPrice, itemPrice);
       if (po.date.localeCompare(mat.lastDate) >= 0) {
         mat.lastDate = po.date;
-        mat.lastPrice = item.price;
+        mat.lastPrice = itemPrice;
       }
-      mat._priceSamples.push({ price: item.price, qty: item.orderedQty, date: po.date });
+      mat._priceSamples.push({ price: itemPrice, qty: Number(item.orderedQty) || 0, date: po.date });
     }
   }
 
@@ -92,8 +94,8 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
     let latestDate = bucket.orders[0]?.date ?? '';
     for (const po of bucket.orders) {
       for (const item of po.items) {
-        totalAmount += item.orderedQty * item.price;
-        totalQty += item.orderedQty;
+        totalAmount += (Number(item.orderedQty) || 0) * (Number(item.price) || 0);
+        totalQty += Number(item.orderedQty) || 0;
       }
       if (!earliestDate || po.date.localeCompare(earliestDate) < 0) earliestDate = po.date;
       if (!latestDate || po.date.localeCompare(latestDate) > 0) latestDate = po.date;
