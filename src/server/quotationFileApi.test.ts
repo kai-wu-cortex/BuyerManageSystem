@@ -20,5 +20,9 @@ assert.equal(
   ),
   'attachment; filename="quote.xlsx"',
 );
+assert.equal(
+  getQuotationFileDisposition('application/vnd.ms-excel', '佰仕特报价单.xls'),
+  "attachment; filename=\"quotation-file.xls\"; filename*=UTF-8''%E4%BD%B0%E4%BB%95%E7%89%B9%E6%8A%A5%E4%BB%B7%E5%8D%95.xls",
+);
 
 console.log('quotation file policy tests passed');

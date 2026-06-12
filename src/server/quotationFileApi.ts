@@ -41,7 +41,12 @@ export function getQuotationFileDisposition(contentType: string, fileName: strin
   const disposition = contentType === 'application/pdf' || contentType.startsWith('image/')
     ? 'inline'
     : 'attachment';
-  return `${disposition}; filename="${fileName.replace(/["\r\n]/g, '_')}"`;
+  const cleanName = fileName.replace(/["\r\n]/g, '_');
+  if (/^[\x20-\x7e]+$/.test(cleanName)) {
+    return `${disposition}; filename="${cleanName}"`;
+  }
+  const extension = cleanName.match(/(\.[a-zA-Z0-9]+)$/)?.[1] ?? '';
+  return `${disposition}; filename="quotation-file${extension}"; filename*=UTF-8''${encodeURIComponent(cleanName)}`;
 }
 
 export async function handleQuotationUploadRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
