@@ -37,6 +37,7 @@ import POCardView, { type CardViewMode } from './POCardView';
 
 interface POListProps {
   purchaseOrders: PurchaseOrder[];
+  dataRevision?: number;
   onReplaceOrders: (orders: PurchaseOrder[]) => void;
   targetSearchTerm?: string;
   onClearTargetSearchTerm?: () => void;
@@ -300,6 +301,7 @@ const renderCellContent = (
 
 export default function POList({ 
   purchaseOrders, 
+  dataRevision = 0,
   onReplaceOrders,
   targetSearchTerm, 
   onClearTargetSearchTerm,
@@ -975,6 +977,9 @@ export default function POList({
           accept=".xlsx" 
           className="hidden" 
           ref={fileInputRef} 
+          onClick={event => {
+            event.currentTarget.value = '';
+          }}
           onChange={handleFileUpload} 
         />
         <button 
@@ -1044,7 +1049,11 @@ export default function POList({
       scrollContainerRef.current.scrollTop = 0;
     }
     setScrollTop(0);
-  }, [searchTerm, statusFilter, execFilter, inboundFilter, sheetSortField, sheetSortOrder, purchaseOrders]);
+  }, [searchTerm, statusFilter, execFilter, inboundFilter, sheetSortField, sheetSortOrder, purchaseOrders, dataRevision]);
+
+  useEffect(() => {
+    setDetailDrawerPOId(null);
+  }, [dataRevision]);
 
   const ledgerTotals = useMemo(() => {
     return filteredLedgerRows.reduce(
@@ -1090,6 +1099,9 @@ export default function POList({
             accept=".xlsx" 
             className="hidden" 
             ref={fileInputRef} 
+            onClick={event => {
+              event.currentTarget.value = '';
+            }}
             onChange={handleFileUpload} 
           />
           <button 
@@ -1458,6 +1470,7 @@ export default function POList({
       <div className="bg-white border border-slate-200 rounded-xl shadow-md overflow-hidden">
         <div
           ref={scrollContainerRef}
+          key={`ledger-scroll-${dataRevision}`}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
           className="overflow-auto max-w-full"
           style={{ maxHeight: 'calc(100vh - 280px)', minHeight: '400px' }}
@@ -1483,6 +1496,7 @@ export default function POList({
 
             return (
               <table
+                key={`ledger-table-${dataRevision}-${viewMode}-${rowHeight}`}
                 style={{ width: totalWidth, minWidth: totalWidth, tableLayout: 'fixed' }}
                 className="text-left border-collapse"
               >

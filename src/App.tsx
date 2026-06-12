@@ -181,6 +181,15 @@ export function mergePurchaseOrdersById(
   return { merged, stats: { added, updated, retained, unchanged } };
 }
 
+export function preparePurchaseOrdersForState(orders: PurchaseOrder[]): PurchaseOrder[] {
+  return orders
+    .map(order => ({
+      ...order,
+      items: Array.isArray(order.items) ? order.items.map(item => ({ ...item })) : [],
+    }))
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
 export interface SampleMergeStats {
   added: number;
   updated: number;
@@ -286,6 +295,7 @@ export default function App() {
 
   // Procurement Datasets with CloudBase synchronization
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [ledgerRevision, setLedgerRevision] = useState(0);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [samples, setSamples] = useState<SampleRecord[]>([]);
   const [notes, setNotes] = useState<Record<string, StickyNote>>({});
@@ -355,9 +365,8 @@ export default function App() {
     const savedPO = localStorage.getItem("purchase_orders");
     if (savedPO) {
       try {
-        const parsed = JSON.parse(savedPO) as PurchaseOrder[];
-        const sorted = parsed.sort((a, b) => b.date.localeCompare(a.date));
-        setPurchaseOrders(sorted);
+        setPurchaseOrders(preparePurchaseOrdersForState(JSON.parse(savedPO) as PurchaseOrder[]));
+        setLedgerRevision(revision => revision + 1);
       } catch (e) {
         console.error("Failed to parse POs from localStorage:", e);
       }
@@ -469,8 +478,10 @@ export default function App() {
   // Sync state values on changes directly to CloudBase
   const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
     try {
-      localStorage.setItem("purchase_orders", JSON.stringify(updatedOrders));
-      setPurchaseOrders(updatedOrders);
+      const preparedOrders = preparePurchaseOrdersForState(updatedOrders);
+      localStorage.setItem("purchase_orders", JSON.stringify(preparedOrders));
+      setPurchaseOrders(preparedOrders);
+      setLedgerRevision(revision => revision + 1);
     } catch (error) {
       console.error(error);
     }
@@ -1019,6 +1030,9 @@ export default function App() {
               accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               ref={fileInputRef}
+              onClick={event => {
+                event.currentTarget.value = '';
+              }}
               onChange={handleFileUpload}
             />
 
@@ -1318,6 +1332,9 @@ export default function App() {
                     accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     className="hidden"
                     ref={fileInputRef}
+                    onClick={event => {
+                      event.currentTarget.value = '';
+                    }}
                     onChange={handleFileUpload}
                   />
                   <button
@@ -1389,6 +1406,7 @@ export default function App() {
               ) : purchaseOrders.length === 0 ? (
                 <POList
                   purchaseOrders={purchaseOrders}
+                  dataRevision={ledgerRevision}
                   onReplaceOrders={handleUpdateOrders}
                   authUser={authUser}
                   onNavigateToNotes={(poId, autoAdd = false) => {
@@ -1421,6 +1439,7 @@ export default function App() {
                   {activeTab === 'ledger' && (
                     <POList
                       purchaseOrders={purchaseOrders}
+                      dataRevision={ledgerRevision}
                       onReplaceOrders={handleUpdateOrders}
                       authUser={authUser}
                       targetSearchTerm={targetSearchTerm}

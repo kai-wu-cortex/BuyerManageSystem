@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mergePurchaseOrdersById, mergeSampleRecordsById } from '../App';
+import { mergePurchaseOrdersById, mergeSampleRecordsById, preparePurchaseOrdersForState } from '../App';
 import type { PurchaseOrder, SampleRecord } from '../types';
 
 function makeOrder(id: string, supplier = 'A', deliveryDate = '2026-06-15'): PurchaseOrder {
@@ -35,6 +35,36 @@ function makeOrder(id: string, supplier = 'A', deliveryDate = '2026-06-15'): Pur
   const result = mergePurchaseOrdersById(old, old);
   assert.equal(result.merged.length, 2);
   assert.deepEqual(result.stats, { added: 0, updated: 0, retained: 0, unchanged: 2 });
+}
+
+// 2.1 Safari/虚拟表格刷新：即使数据内容相同，写入状态也要得到新的数组/对象引用
+{
+  const old = [
+    {
+      ...makeOrder('CGDD-001'),
+      date: '2026-06-01',
+      items: [{
+        code: 'MAT-001',
+        name: '物料1',
+        spec: '规格',
+        category: '亮片',
+        unit: 'PCS',
+        orderedQty: 1,
+        price: 1,
+        taxAmount: 0,
+        remark: '',
+        receivedQty: 0,
+      }],
+    },
+    makeOrder('CGDD-002', 'B', '2026-06-20'),
+  ];
+  old[1].date = '2026-06-05';
+
+  const prepared = preparePurchaseOrdersForState(old);
+  assert.notEqual(prepared, old);
+  assert.notEqual(prepared[1], old[0]);
+  assert.notEqual(prepared[1].items[0], old[0].items[0]);
+  assert.deepEqual(prepared.map(po => po.id), ['CGDD-002', 'CGDD-001']);
 }
 
 // 3. 新台账更新了一条 + 新增一条；旧台账里有一条新台账没出现 → 保留
