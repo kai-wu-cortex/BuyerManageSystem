@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { rowsToLedgerLines } from './ledgerImport';
-import { parseClipboardLine } from './ledgerHelper';
+import { getFlatLedgerRows, parseClipboardLine } from './ledgerHelper';
 
 const rows = [
   [
@@ -110,6 +110,14 @@ assert.equal(emptyParsed?.item.price, '', 'empty 实际含税单价 should stay 
 assert.equal(emptyParsed?.item.taxAmount, '', 'empty 税额 should stay empty');
 assert.equal(emptyParsed?.item.rowExecutionStatus, '', 'empty 行执行状态 should stay empty');
 assert.equal(emptyParsed?.item.rowInboundStatus, '', 'empty 行入库状态 should stay empty');
+
+const [emptyFlatRow] = getFlatLedgerRows([{
+  ...(emptyParsed?.po as any),
+  items: [emptyParsed?.item as any],
+}]);
+assert.equal(emptyFlatRow.price, '', 'flat ledger row should keep empty price empty');
+assert.equal(emptyFlatRow.orderedQty, '', 'flat ledger row should keep empty quantity empty');
+assert.equal(Number.isNaN(emptyFlatRow.unexecutedQty), false, 'flat ledger row should not produce NaN when quantities are empty');
 
 const legacyLine = 'CGDD-TEST-02\t2026-06-12\t供应商B\t已审核\t未执行\t未入库\t\t0\t0\t未执行\t未入库\tMAT-002\t测试物料\t规格\t包装物\tPCS\t1\t1\t10\t13\t1.3\t\t0\t0\t1\t1\t0\t0\t0\t5\t\t\t\t快递\t月结\t2026-06-20';
 assert.deepEqual(rowsToLedgerLines([legacyLine.split('\t')]), [legacyLine], 'rows without a header should preserve legacy fixed-column input');

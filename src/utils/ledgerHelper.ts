@@ -42,6 +42,11 @@ export interface FlatLedgerRow {
 // Current system operating date mock baseline
 const SYSTEM_TODAY = "2026-06-03";
 
+function toFiniteNumber(value: unknown): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
 /**
  * Computes a list of fully projected flattened line-item rows from all Purchase Orders.
  */
@@ -50,18 +55,20 @@ export function getFlatLedgerRows(purchaseOrders: PurchaseOrder[]): FlatLedgerRo
 
   purchaseOrders.forEach(po => {
     po.items.forEach(item => {
+      const orderedQty = toFiniteNumber(item.orderedQty);
+      const receivedQty = toFiniteNumber(item.receivedQty);
       // Determine row execution states dynamically based on delivered progress
       let rowExec: PurchaseExecutionStatus = "未执行";
-      if (item.receivedQty >= item.orderedQty) {
+      if (receivedQty >= orderedQty) {
         rowExec = "全部执行";
-      } else if (item.receivedQty > 0) {
+      } else if (receivedQty > 0) {
         rowExec = "部分执行";
       }
 
       let rowInb: InboundStatus = "未入库";
-      if (item.receivedQty >= item.orderedQty) {
+      if (receivedQty >= orderedQty) {
         rowInb = "全部入库";
-      } else if (item.receivedQty > 0) {
+      } else if (receivedQty > 0) {
         rowInb = "部分入库";
       }
 
@@ -71,13 +78,13 @@ export function getFlatLedgerRows(purchaseOrders: PurchaseOrder[]): FlatLedgerRo
       const executedBasic = item.executedBasicQty !== undefined ? item.executedBasicQty : item.receivedQty;
       const executedQuantity = item.executedQty !== undefined ? item.executedQty : item.receivedQty;
       
-      const unexecutedQuantity = Math.max(0, item.orderedQty - item.receivedQty);
-      const unexecutedBasic = Math.max(0, basicQuantity - executedBasic);
+      const unexecutedQuantity = Math.max(0, orderedQty - receivedQty);
+      const unexecutedBasic = Math.max(0, toFiniteNumber(basicQuantity) - toFiniteNumber(executedBasic));
       
       const executedInbound = item.executedInboundQty !== undefined ? item.executedInboundQty : item.receivedQty;
       const executedNotInbound = item.executedNotInboundQty !== undefined ? item.executedNotInboundQty : 0;
       
-      const execRateVal = item.orderedQty > 0 ? Math.round((item.receivedQty / item.orderedQty) * 100) : 0;
+      const execRateVal = orderedQty > 0 ? Math.round((receivedQty / orderedQty) * 100) : 0;
 
       // Days remaining logic
       let dRem: number | string = "";

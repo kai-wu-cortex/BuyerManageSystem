@@ -378,7 +378,10 @@ interface PODetailBodyProps {
 
 export function formatItemFieldValue(item: OrderItem, key: ItemFieldKey): string | null {
   if (key === 'subtotal') {
-    const value = item.orderedQty * item.price;
+    const qty = Number(item.orderedQty);
+    const price = Number(item.price);
+    if (!Number.isFinite(qty) || !Number.isFinite(price)) return null;
+    const value = qty * price;
     return `¥${value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 
@@ -415,7 +418,11 @@ export function formatItemFieldValue(item: OrderItem, key: ItemFieldKey): string
 }
 
 function PODetailBody({ po, drawerCols, drawerFields, itemFields }: PODetailBodyProps) {
-  const totalPOAmount = po.items.reduce((sum, item) => sum + (item.orderedQty * item.price), 0);
+  const totalPOAmount = po.items.reduce((sum, item) => {
+    const qty = Number(item.orderedQty);
+    const price = Number(item.price);
+    return sum + (Number.isFinite(qty) && Number.isFinite(price) ? qty * price : 0);
+  }, 0);
   const activeItemFieldKeys = (Object.keys(ITEM_FIELD_LABELS) as ItemFieldKey[]).filter(key => itemFields[key]);
 
   return (

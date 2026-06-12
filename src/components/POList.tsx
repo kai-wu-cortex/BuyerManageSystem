@@ -126,6 +126,30 @@ const getRowPaddingClass = (rowHeight: 'compact' | 'medium' | 'relaxed') => {
   }
 };
 
+function toFiniteNumber(value: unknown): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+function formatNumberCell(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue.toLocaleString() : String(value);
+}
+
+function formatCurrencyCell(value: unknown, fractionDigits = 2): string {
+  if (value === null || value === undefined || value === '') return '';
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return String(value);
+  return `¥${numberValue.toLocaleString('zh-CN', { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })}`;
+}
+
+function formatPercentCell(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? `${numberValue}%` : String(value);
+}
+
 // Render content cell based on field
 const renderCellContent = (
   field: keyof FlatLedgerRow, 
@@ -251,31 +275,31 @@ const renderCellContent = (
     case 'unit':
       return <span className="text-center text-slate-600 block">{row.unit}</span>;
     case 'orderedQty':
-      return <span className="text-right font-bold text-slate-900 block">{row.orderedQty.toLocaleString()}</span>;
+      return <span className="text-right font-bold text-slate-900 block">{formatNumberCell(row.orderedQty)}</span>;
     case 'basicQty':
-      return <span className="text-right font-bold text-slate-600 block">{(row.basicQty !== undefined ? row.basicQty : row.orderedQty).toLocaleString()}</span>;
+      return <span className="text-right font-bold text-slate-600 block">{formatNumberCell(row.basicQty !== undefined ? row.basicQty : row.orderedQty)}</span>;
     case 'price':
-      return <span className="text-right font-bold text-slate-900 block font-mono">¥{row.price.toFixed(4)}</span>;
+      return <span className="text-right font-bold text-slate-900 block font-mono">{formatCurrencyCell(row.price, 4)}</span>;
     case 'taxRate':
-      return <span className="text-right text-slate-500 block">{row.taxRate}%</span>;
+      return <span className="text-right text-slate-500 block">{formatPercentCell(row.taxRate)}</span>;
     case 'taxAmount':
-      return <span className="text-right font-semibold text-amber-600 block">¥{row.taxAmount ? row.taxAmount.toFixed(2) : '0.00'}</span>;
+      return <span className="text-right font-semibold text-amber-600 block">{formatCurrencyCell(row.taxAmount, 2)}</span>;
     case 'remark':
       return <span className="text-slate-400 font-sans max-w-[150px] truncate block" title={row.remark}>{row.remark || '-'}</span>;
     case 'executedBasicQty':
-      return <span className="text-right text-slate-600 block">{row.executedBasicQty}</span>;
+      return <span className="text-right text-slate-600 block">{formatNumberCell(row.executedBasicQty)}</span>;
     case 'executedQty':
-      return <span className="text-right font-bold text-[#22C55E] block">{row.executedQty}</span>;
+      return <span className="text-right font-bold text-[#22C55E] block">{formatNumberCell(row.executedQty)}</span>;
     case 'unexecutedBasicQty':
-      return <span className="text-right text-slate-600 block">{row.unexecutedBasicQty}</span>;
+      return <span className="text-right text-slate-600 block">{formatNumberCell(row.unexecutedBasicQty)}</span>;
     case 'unexecutedQty':
-      return <span className="text-right text-slate-600 block">{row.unexecutedQty}</span>;
+      return <span className="text-right text-slate-600 block">{formatNumberCell(row.unexecutedQty)}</span>;
     case 'executedInboundQty':
-      return <span className="text-right font-semibold text-slate-800 block">{row.executedInboundQty}</span>;
+      return <span className="text-right font-semibold text-slate-800 block">{formatNumberCell(row.executedInboundQty)}</span>;
     case 'executedNotInboundQty':
-      return <span className="text-right text-slate-500 block">{row.executedNotInboundQty}</span>;
+      return <span className="text-right text-slate-500 block">{formatNumberCell(row.executedNotInboundQty)}</span>;
     case 'executionRate':
-      return <span className="text-right font-bold text-[#22C55E] block">{row.executionRate}%</span>;
+      return <span className="text-right font-bold text-[#22C55E] block">{formatPercentCell(row.executionRate)}</span>;
     case 'daysRemaining':
       return (
         <span className={`text-center font-bold block ${isOverdue ? 'text-red-500 font-extrabold animate-pulse' : 'text-slate-600'}`}>
@@ -1058,9 +1082,9 @@ export default function POList({
   const ledgerTotals = useMemo(() => {
     return filteredLedgerRows.reduce(
       (totals, row) => ({
-        amount: totals.amount + (row.orderedQty * row.price),
-        quantity: totals.quantity + row.orderedQty,
-        tax: totals.tax + (row.taxAmount || 0),
+        amount: totals.amount + (toFiniteNumber(row.orderedQty) * toFiniteNumber(row.price)),
+        quantity: totals.quantity + toFiniteNumber(row.orderedQty),
+        tax: totals.tax + toFiniteNumber(row.taxAmount),
       }),
       { amount: 0, quantity: 0, tax: 0 },
     );

@@ -40,6 +40,11 @@ function renderValue(field: keyof FlatLedgerRow, value: unknown): string {
   return String(value);
 }
 
+function toFiniteNumber(value: unknown): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
 /** PO 维度的轻量聚合：id → {itemCount, totalAmount}，O(N) 一次性算好 */
 interface POAggregate {
   itemCount: number;
@@ -63,7 +68,7 @@ export default function POCardView({
     for (const po of purchaseOrders) {
       let totalAmount = 0;
       for (const item of po.items) {
-        totalAmount += item.orderedQty * item.price;
+        totalAmount += toFiniteNumber(item.orderedQty) * toFiniteNumber(item.price);
       }
       map.set(po.id, { itemCount: po.items.length, totalAmount });
     }
