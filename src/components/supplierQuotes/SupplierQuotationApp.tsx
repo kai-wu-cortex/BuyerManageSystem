@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   BadgeDollarSign,
   CheckCircle2,
-  FileSpreadsheet,
   Loader2,
   Plus,
   RefreshCw,
@@ -260,7 +259,7 @@ export default function SupplierQuotationApp() {
   ];
 
   return (
-    <div className="min-h-[70vh] overflow-hidden rounded-2xl border border-slate-200 bg-[#eef2f3] shadow-sm">
+    <div className="min-h-[70vh] bg-slate-50/70">
       <input
         ref={fileInputRef}
         type="file"
@@ -271,47 +270,10 @@ export default function SupplierQuotationApp() {
           if (file) void handleFile(file);
         }}
       />
-      <div className="flex min-h-[70vh]">
-        <aside className="w-52 shrink-0 border-r border-slate-800 bg-[#182329] p-4 text-slate-100">
-          <div className="mb-6 flex items-center gap-3 border-b border-white/10 pb-4">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-400 text-slate-950">
-              <FileSpreadsheet className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-sm font-black">供应商报价</p>
-              <p className="text-[9px] uppercase tracking-[0.18em] text-slate-400">Quotation archive</p>
-            </div>
-          </div>
-          <nav className="space-y-1">
-            {navigation.map(item => {
-              const Icon = item.icon;
-              const active = view === item.id || (view === 'review' && item.id === 'archive');
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setView(item.id)}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs font-bold transition ${
-                    active ? 'bg-amber-400 text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                </button>
-              );
-            })}
-          </nav>
-          <div className="mt-8 rounded-xl border border-white/10 bg-white/5 p-3 text-[10px] leading-5 text-slate-400">
-            原文件私有保存<br />
-            AI 仅生成待校对草稿<br />
-            正式比价需人工确认
-          </div>
-        </aside>
-
-        <main className="min-w-0 flex-1 p-5">
+      <main className="min-w-0 p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-700">Procurement intelligence</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600">Procurement intelligence</p>
               <h2 className="mt-1 text-xl font-black text-slate-900">
                 {view === 'archive' && '报价单档案'}
                 {view === 'review' && '解析校对'}
@@ -333,13 +295,41 @@ export default function SupplierQuotationApp() {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={busy}
-                className="flex items-center gap-2 rounded-lg bg-amber-400 px-4 py-2 text-xs font-black text-slate-950 shadow-sm hover:bg-amber-300 disabled:opacity-50"
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white shadow-sm hover:bg-blue-500 disabled:opacity-50"
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
                 上传报价单
               </button>
             </div>
           </div>
+
+          <nav
+            role="tablist"
+            aria-label="供应商报价单功能"
+            className="mb-4 flex gap-1 overflow-x-auto border-b border-slate-200"
+          >
+            {navigation.map(item => {
+              const Icon = item.icon;
+              const active = view === item.id || (view === 'review' && item.id === 'archive');
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setView(item.id)}
+                  className={`relative flex shrink-0 items-center gap-2 px-4 py-3 text-xs font-black transition ${
+                    active
+                      ? 'text-blue-700 after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-blue-600'
+                      : 'text-slate-500 hover:bg-white/70 hover:text-slate-900'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
 
           {error ? (
             <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-700">{error}</div>
@@ -389,8 +379,7 @@ export default function SupplierQuotationApp() {
               suppliers={workspace.suppliers}
             />
           ) : null}
-        </main>
-      </div>
+      </main>
     </div>
   );
 }
