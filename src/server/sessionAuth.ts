@@ -10,12 +10,17 @@ type SessionPayload = SessionUser & { exp: number };
 type SessionRequest = { headers?: Record<string, string | string[] | undefined> };
 
 export class SessionAuthError extends Error {
+  readonly statusCode: 401 | 403;
+  readonly code: 'AUTH_REQUIRED' | 'FORBIDDEN';
+
   constructor(
     message: string,
-    public readonly statusCode: 401 | 403,
-    public readonly code: 'AUTH_REQUIRED' | 'FORBIDDEN',
+    statusCode: 401 | 403,
+    code: 'AUTH_REQUIRED' | 'FORBIDDEN',
   ) {
     super(message);
+    this.statusCode = statusCode;
+    this.code = code;
   }
 }
 
