@@ -7,6 +7,8 @@ import { parseSampleWithGemini } from "./src/lib/geminiSampleParser";
 import { handleMongoCollectionRequest, handleMongoDocumentRequest } from "./src/server/mongoDataApi";
 import { handleLoginRequest } from "./src/server/loginApi";
 import { handleLogoutRequest } from "./src/server/logoutApi";
+import { handleQuotationFileRequest, handleQuotationUploadRequest } from "./src/server/quotationFileApi";
+import { handleQuotationParseRequest } from "./src/server/quotationParseApi";
 import { getMongoDb } from "./src/lib/mongodb";
 
 dotenv.config({ path: ".env.local" });
@@ -80,6 +82,15 @@ app.post("/api/login", async (req, res) => {
 });
 app.post("/api/logout", async (req, res) => {
   await handleLogoutRequest(req, res);
+});
+app.post("/api/quotation/upload", async (req, res) => {
+  await handleQuotationUploadRequest(req, res);
+});
+app.get("/api/quotation/file", async (req, res) => {
+  await handleQuotationFileRequest(req, res);
+});
+app.post("/api/quotation/parse", async (req, res) => {
+  await handleQuotationParseRequest(req, res);
 });
 
 async function startServer() {

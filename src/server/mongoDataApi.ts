@@ -1,6 +1,7 @@
 import type { Response } from 'express';
 import type { Document } from 'mongodb';
 import { getMongoCollection } from '../lib/mongodb.ts';
+import { requireBuyerSession, SessionAuthError } from './sessionAuth.ts';
 
 const ALLOWED_COLLECTIONS = new Set([
   'inventory_stock',
@@ -10,6 +11,21 @@ const ALLOWED_COLLECTIONS = new Set([
   'ledger_backup_chunks',
   'buyer_system_view_settings',
   'noteboard_items',
+  'supplier_profiles',
+  'supplier_quotations',
+  'supplier_quotation_items',
+  'supplier_quote_parse_jobs',
+  'supplier_product_groups',
+  'supplier_quote_audit_logs',
+]);
+
+const QUOTATION_COLLECTIONS = new Set([
+  'supplier_profiles',
+  'supplier_quotations',
+  'supplier_quotation_items',
+  'supplier_quote_parse_jobs',
+  'supplier_product_groups',
+  'supplier_quote_audit_logs',
 ]);
 
 type ApiRequest = {
@@ -17,6 +33,7 @@ type ApiRequest = {
   body?: unknown;
   params?: Record<string, unknown>;
   query?: Record<string, unknown>;
+  headers?: Record<string, string | string[] | undefined>;
 };
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
 
@@ -110,11 +127,26 @@ function sendError(res: ApiResponse, statusCode: number, code: string, message: 
   return res.status(statusCode).json({ success: false, code, message });
 }
 
+function authorizeCollection(req: ApiRequest, res: ApiResponse, collectionName: string): unknown | null {
+  if (!QUOTATION_COLLECTIONS.has(collectionName)) return null;
+  try {
+    requireBuyerSession(req, process.env.SESSION_SECRET ?? '');
+    return null;
+  } catch (error) {
+    if (error instanceof SessionAuthError) {
+      return sendError(res, error.statusCode, error.code, error.message);
+    }
+    return sendError(res, 503, 'SESSION_NOT_CONFIGURED', '服务端会话尚未配置。');
+  }
+}
+
 export async function listMongoDocuments(req: ApiRequest, res: ApiResponse): Promise<unknown> {
   const collectionName = getParam(req, 'collection') ?? '';
   if (!isAllowedCollection(collectionName)) {
     return sendError(res, 404, 'COLLECTION_NOT_FOUND', '集合不存在或不允许访问。');
   }
+  const authError = authorizeCollection(req, res, collectionName);
+  if (authError) return authError;
 
   const collection = await getMongoCollection<MongoRecord>(collectionName);
   const includeIds = getQueryFlag(req, 'includeIds');
@@ -137,6 +169,8 @@ export async function getMongoDocument(req: ApiRequest, res: ApiResponse): Promi
   if (!isAllowedCollection(collectionName)) {
     return sendError(res, 404, 'COLLECTION_NOT_FOUND', '集合不存在或不允许访问。');
   }
+  const authError = authorizeCollection(req, res, collectionName);
+  if (authError) return authError;
 
   const idRaw = getParam(req, 'id');
   if (!idRaw) return sendError(res, 400, 'INVALID_ID', '缺少文档 ID。');
@@ -151,6 +185,8 @@ export async function setMongoDocument(req: ApiRequest, res: ApiResponse): Promi
   if (!isAllowedCollection(collectionName)) {
     return sendError(res, 404, 'COLLECTION_NOT_FOUND', '集合不存在或不允许访问。');
   }
+  const authError = authorizeCollection(req, res, collectionName);
+  if (authError) return authError;
 
   const idRaw = getParam(req, 'id');
   if (!idRaw) return sendError(res, 400, 'INVALID_ID', '缺少文档 ID。');
@@ -182,6 +218,8 @@ export async function deleteMongoDocument(req: ApiRequest, res: ApiResponse): Pr
   if (!isAllowedCollection(collectionName)) {
     return sendError(res, 404, 'COLLECTION_NOT_FOUND', '集合不存在或不允许访问。');
   }
+  const authError = authorizeCollection(req, res, collectionName);
+  if (authError) return authError;
 
   const idRaw = getParam(req, 'id');
   if (!idRaw) return sendError(res, 400, 'INVALID_ID', '缺少文档 ID。');

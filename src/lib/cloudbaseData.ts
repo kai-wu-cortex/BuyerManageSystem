@@ -100,7 +100,13 @@ export type CollectionName =
   | 'ledger_backups'
   | 'ledger_backup_chunks'
   | 'buyer_system_view_settings'
-  | 'noteboard_items';
+  | 'noteboard_items'
+  | 'supplier_profiles'
+  | 'supplier_quotations'
+  | 'supplier_quotation_items'
+  | 'supplier_quote_parse_jobs'
+  | 'supplier_product_groups'
+  | 'supplier_quote_audit_logs';
 
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
 const LEDGER_BACKUP_CHUNK_MAX_BYTES = 500000;
@@ -612,4 +618,10 @@ export const cloudbaseCollections = {
   ledgerBackups: 'ledger_backups',
   ledgerBackupChunks: 'ledger_backup_chunks',
   viewSettings: 'buyer_system_view_settings',
+  supplierProfiles: 'supplier_profiles',
+  supplierQuotations: 'supplier_quotations',
+  supplierQuotationItems: 'supplier_quotation_items',
+  supplierQuoteParseJobs: 'supplier_quote_parse_jobs',
+  supplierProductGroups: 'supplier_product_groups',
+  supplierQuoteAuditLogs: 'supplier_quote_audit_logs',
 } as const satisfies Record<string, CollectionName>;
