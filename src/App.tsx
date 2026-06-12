@@ -11,6 +11,7 @@ import {
   SampleTracker,
   SkeuomorphicNotes,
   SupplierSummaryApp,
+  SupplierQuotationApp,
   preloadAppModule,
   type AppTab,
 } from './appModules';
@@ -55,6 +56,7 @@ import {
   Download,
   RefreshCw,
   FileJson,
+  FileSpreadsheet,
   Loader2,
   LogOut,
 } from 'lucide-react';
@@ -70,6 +72,7 @@ const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
 const miniAppTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
   { id: 'noteboard', label: '便签画板', icon: <LayoutGrid className="w-5 h-5 shrink-0" /> },
   { id: 'supplier-summary', label: '供应商汇总', icon: <Briefcase className="w-5 h-5 shrink-0" /> },
+  { id: 'supplier-quotes', label: '供应商报价', icon: <FileSpreadsheet className="w-5 h-5 shrink-0" /> },
 ];
 
 const MODULE_FALLBACK_LABELS: Record<AppTab, string> = {
@@ -79,6 +82,7 @@ const MODULE_FALLBACK_LABELS: Record<AppTab, string> = {
   notes: '订单便签与流转',
   noteboard: '便签画板',
   'supplier-summary': '供应商汇总',
+  'supplier-quotes': '供应商报价',
 };
 
 function ModuleLoadingFallback({ label }: { label: string }) {
@@ -1322,7 +1326,7 @@ export default function App() {
               </button>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-bold tracking-tight text-slate-800">
-                  {activeTab === 'noteboard' ? '便签画板' : activeTab === 'supplier-summary' ? '供应商汇总' : purchaseOrders.length === 0 ? '系统初始配准' : (
+                  {activeTab === 'noteboard' ? '便签画板' : activeTab === 'supplier-summary' ? '供应商汇总' : activeTab === 'supplier-quotes' ? '供应商报价' : purchaseOrders.length === 0 ? '系统初始配准' : (
                     <>
                       {activeTab === 'dashboard' && '采购物料大屏'}
                       {activeTab === 'ledger' && '采购单台账'}
@@ -1432,6 +1436,8 @@ export default function App() {
                 <NoteboardCanvas authUser={authUser} />
               ) : activeTab === 'supplier-summary' ? (
                 <SupplierSummaryApp purchaseOrders={purchaseOrders} />
+              ) : activeTab === 'supplier-quotes' ? (
+                <SupplierQuotationApp />
               ) : purchaseOrders.length === 0 ? (
                 <POList
                   purchaseOrders={purchaseOrders}
