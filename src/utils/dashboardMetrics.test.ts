@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { PurchaseOrder } from '../types';
-import { buildDashboardMetrics } from './dashboardMetrics';
+import { buildDashboardMetrics, buildLedgerBreakdown } from './dashboardMetrics';
 
 function po(overrides: Partial<PurchaseOrder>): PurchaseOrder {
   return {
@@ -50,21 +50,21 @@ const discountedMetrics = buildDashboardMetrics([po({})]);
 
 assert.equal(
   discountedMetrics.totalAmount,
-  165,
-  'total amount should use net purchase amount after rate discount and order discount amount',
+  200,
+  'total amount should sum every line ordered quantity times actual tax-included unit price',
 );
 assert.deepEqual(
   discountedMetrics.supplierSpend,
-  [{ name: '供应商A', value: 165 }],
-  'supplier ranking should use the same net amount as the dashboard total',
+  [{ name: '供应商A', value: 200 }],
+  'supplier ranking should use line gross amount without applying order-level discounts',
 );
 assert.deepEqual(
   discountedMetrics.categorySpend,
   [
-    { name: '原材料', value: 82.5 },
-    { name: '包装物', value: 82.5 },
+    { name: '原材料', value: 100 },
+    { name: '包装物', value: 100 },
   ],
-  'category spend should distribute order-level discounts proportionally to material lines',
+  'category spend should group line gross amount by category',
 );
 
 const manyCategories = ['亮片', '外调', '垫片', '包装物', '标签', '瓶子', '袋子', '辅料', '玻璃', '运费'];
@@ -161,8 +161,78 @@ assert.deepEqual(
   sanitizedMetrics.categorySpend,
   [
     { name: '亮片', value: 100 },
-    { name: '其他', value: 75 },
+    { name: '6MM', value: 50 },
+    { name: '烫金事业部', value: 25 },
     { name: '3D亮片', value: 10 },
   ],
-  'dashboard should keep real 商品类别 values and only fold spec/department-like polluted values into 其他',
+  'dashboard should keep imported category values as-is when grouping by 商品类别',
+);
+
+const customBreakdownOrders = [
+  po({
+    id: 'PO-CUSTOM-1',
+    supplier: '供应商A',
+    items: [
+      {
+        code: 'MAT-A',
+        name: '物料A',
+        spec: '规格',
+        category: '亮片',
+        unit: 'KG',
+        orderedQty: 2,
+        price: 10,
+        taxAmount: 2.6,
+        remark: '',
+        receivedQty: 0,
+      },
+      {
+        code: 'MAT-B',
+        name: '物料B',
+        spec: '规格',
+        category: '亮片',
+        unit: 'KG',
+        orderedQty: 3,
+        price: 20,
+        taxAmount: 7.8,
+        remark: '',
+        receivedQty: 0,
+      },
+    ],
+  }),
+  po({
+    id: 'PO-CUSTOM-2',
+    supplier: '供应商B',
+    items: [
+      {
+        code: 'MAT-C',
+        name: '物料C',
+        spec: '规格',
+        category: '包装物',
+        unit: 'PCS',
+        orderedQty: 4,
+        price: 5,
+        taxAmount: 2.6,
+        remark: '',
+        receivedQty: 0,
+      },
+    ],
+  }),
+];
+
+assert.deepEqual(
+  buildLedgerBreakdown(customBreakdownOrders, { groupBy: 'category', metric: 'amount', limit: 5 }),
+  [
+    { name: '亮片', value: 80 },
+    { name: '包装物', value: 20 },
+  ],
+  'custom breakdown should group by selected ledger field and sum line amount',
+);
+
+assert.deepEqual(
+  buildLedgerBreakdown(customBreakdownOrders, { groupBy: 'supplier', metric: 'orderCount', limit: 5 }),
+  [
+    { name: '供应商A', value: 1 },
+    { name: '供应商B', value: 1 },
+  ],
+  'custom breakdown should count unique purchase orders by selected field',
 );

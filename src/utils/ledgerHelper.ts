@@ -102,8 +102,8 @@ export function getFlatLedgerRows(purchaseOrders: PurchaseOrder[]): FlatLedgerRo
         remarks: po.remarks,
         discountRate: po.discountRate !== undefined ? po.discountRate : "",
         discountAmount: po.discountAmount !== undefined ? po.discountAmount : "",
-        rowExecutionStatus: item.rowExecutionStatus || rowExec,
-        rowInboundStatus: item.rowInboundStatus || rowInb,
+        rowExecutionStatus: item.rowExecutionStatus ?? rowExec,
+        rowInboundStatus: item.rowInboundStatus ?? rowInb,
         code: item.code,
         name: item.name,
         spec: item.spec,
@@ -114,7 +114,7 @@ export function getFlatLedgerRows(purchaseOrders: PurchaseOrder[]): FlatLedgerRo
         price: item.price,
         taxRate: tRate,
         taxAmount: item.taxAmount,
-        remark: item.remark || "",
+        remark: item.remark ?? "",
         executedBasicQty: executedBasic,
         executedQty: executedQuantity,
         unexecutedBasicQty: unexecutedBasic,
@@ -123,9 +123,9 @@ export function getFlatLedgerRows(purchaseOrders: PurchaseOrder[]): FlatLedgerRo
         executedNotInboundQty: executedNotInbound,
         executionRate: execRateVal,
         daysRemaining: dRem,
-        lastInboundDate: item.lastInboundDate || item.inboundDate || "",
-        customerName: item.customerName || "",
-        sourceOrderId: item.sourceOrderId || "",
+        lastInboundDate: item.lastInboundDate ?? item.inboundDate ?? "",
+        customerName: item.customerName ?? "",
+        sourceOrderId: item.sourceOrderId ?? "",
         transportMethod: po.transportMethod,
         settlementType: po.settlementType,
         deliveryDate: po.deliveryDate
@@ -152,13 +152,16 @@ export function parseClipboardLine(line: string): { po: Partial<PurchaseOrder>, 
   // 31: 客户名称, 32: 源单单号, 33: 运输方式, 34: 结算方式, 35: 交货日期
 
   const getValue = (idx: number, fallback: string = "") => parts[idx]?.trim() || fallback;
-  const getNumValue = (idx: number, fallback: number = 0) => {
+  const getRawNumValue = (idx: number, fallback: number | '' = 0): number | '' => {
     const raw = getValue(idx);
     if (!raw) return fallback;
-    // Strip commas, spaces
     const clean = raw.replace(/,/g, '');
     const val = parseFloat(clean);
     return isNaN(val) ? fallback : val;
+  };
+  const getNumValue = (idx: number, fallback: number = 0): number => {
+    const value = getRawNumValue(idx, fallback);
+    return typeof value === 'number' ? value : fallback;
   };
 
   const id = getValue(0);
@@ -189,57 +192,56 @@ export function parseClipboardLine(line: string): { po: Partial<PurchaseOrder>, 
   }
 
   const statusRaw = getValue(3);
-  const status: POStatus = statusRaw.includes("未") ? "未审核" : "已审核";
+  const status = (statusRaw ? (statusRaw.includes("未") ? "未审核" : "已审核") : "") as POStatus;
   
   const execRaw = getValue(4);
-  let executionStatus: PurchaseExecutionStatus = "未执行";
+  let executionStatus = "" as PurchaseExecutionStatus;
   if (execRaw.includes("全部")) executionStatus = "全部执行";
   else if (execRaw.includes("部分")) executionStatus = "部分执行";
+  else if (execRaw) executionStatus = "未执行";
 
   const inbRaw = getValue(5);
-  let inboundStatus: InboundStatus = "未入库";
+  let inboundStatus = "" as InboundStatus;
   if (inbRaw.includes("全部")) inboundStatus = "全部入库";
   else if (inbRaw.includes("部分")) inboundStatus = "部分入库";
+  else if (inbRaw) inboundStatus = "未入库";
 
-  const remarks = getValue(6) || "剪贴板快速批录";
+  const remarks = getValue(6);
   const discountRate = getNumValue(7, 0);
   const discountAmount = getNumValue(8, 0);
 
-  const rowExecutionStatus = getValue(9) as PurchaseExecutionStatus || executionStatus;
-  const rowInboundStatus = getValue(10) as InboundStatus || inboundStatus;
-  const code = getValue(11) || "CUSTOM-MAT";
-  const name = getValue(12) || "自定义剪铁板物料";
-  const spec = getValue(13) || "规格";
-  const category = getValue(14) || "其它";
-  const unit = getValue(15) || "PCS";
-  const orderedQty = getNumValue(16, 100);
-  const basicQty = getNumValue(17, orderedQty);
-  const price = getNumValue(18, 1.0);
-  const taxRate = getNumValue(19, 13);
-  const taxAmount = getNumValue(20, Math.round(orderedQty * price * taxRate / 113));
+  const rowExecutionStatus = getValue(9) as PurchaseExecutionStatus;
+  const rowInboundStatus = getValue(10) as InboundStatus;
+  const code = getValue(11);
+  const name = getValue(12);
+  const spec = getValue(13);
+  const category = getValue(14);
+  const unit = getValue(15);
+  const orderedQty = getRawNumValue(16, '');
+  const basicQty = getRawNumValue(17, '');
+  const price = getRawNumValue(18, '');
+  const taxRate = getRawNumValue(19, '');
+  const taxAmount = getRawNumValue(20, '');
   const remark = getValue(21);
 
-  const executedBasicQty = getNumValue(22, inboundStatus === '全部入库' ? basicQty : inboundStatus === '部分入库' ? Math.round(basicQty * 0.5) : 0);
-  const executedQty = getNumValue(23, inboundStatus === '全部入库' ? orderedQty : inboundStatus === '部分入库' ? Math.round(orderedQty * 0.5) : 0);
+  const executedBasicQty = getRawNumValue(22, '');
+  const executedQty = getRawNumValue(23, '');
   
-  const unexecutedBasicQty = getNumValue(24, Math.max(0, basicQty - executedBasicQty));
-  const unexecutedQty = getNumValue(25, Math.max(0, orderedQty - executedQty));
+  const numericExecutedQty = typeof executedQty === 'number' ? executedQty : 0;
+  const unexecutedBasicQty = getRawNumValue(24, '');
+  const unexecutedQty = getRawNumValue(25, '');
   
-  const executedInboundQty = getNumValue(26, executedQty);
-  const executedNotInboundQty = getNumValue(27, 0);
-  const executionRate = getNumValue(28, orderedQty > 0 ? Math.round((executedQty / orderedQty) * 100) : 0);
+  const executedInboundQty = getRawNumValue(26, '');
+  const executedNotInboundQty = getRawNumValue(27, '');
+  const executionRate = getRawNumValue(28, '');
   const daysRemaining = getValue(29);
   const lastInboundDate = getValue(30);
   const customerName = getValue(31);
   const sourceOrderId = getValue(32);
 
-  const transportMethod = getValue(33) || "快递";
-  const settlementType = getValue(34) || "月结";
-  const deliveryDate = getValue(35) || (() => {
-    const d = new Date(date);
-    d.setDate(d.getDate() + 5);
-    return d.toISOString().split('T')[0];
-  })();
+  const transportMethod = getValue(33);
+  const settlementType = getValue(34);
+  const deliveryDate = getValue(35);
 
   return {
     po: {
@@ -262,22 +264,22 @@ export function parseClipboardLine(line: string): { po: Partial<PurchaseOrder>, 
       spec,
       category,
       unit,
-      orderedQty,
-      basicQty,
-      price,
-      taxRate,
-      taxAmount,
+      orderedQty: orderedQty as unknown as number,
+      basicQty: basicQty as unknown as number,
+      price: price as unknown as number,
+      taxRate: taxRate as unknown as number,
+      taxAmount: taxAmount as unknown as number,
       remark,
-      receivedQty: executedQty,
+      receivedQty: numericExecutedQty,
       rowExecutionStatus,
       rowInboundStatus,
-      executedBasicQty,
-      executedQty,
-      unexecutedBasicQty,
-      unexecutedQty,
-      executedInboundQty,
-      executedNotInboundQty,
-      executionRate,
+      executedBasicQty: executedBasicQty as unknown as number,
+      executedQty: executedQty as unknown as number,
+      unexecutedBasicQty: unexecutedBasicQty as unknown as number,
+      unexecutedQty: unexecutedQty as unknown as number,
+      executedInboundQty: executedInboundQty as unknown as number,
+      executedNotInboundQty: executedNotInboundQty as unknown as number,
+      executionRate: executionRate as unknown as number,
       lastInboundDate,
       customerName,
       sourceOrderId

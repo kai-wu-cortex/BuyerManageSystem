@@ -12,6 +12,33 @@ export interface DashboardMetrics {
   categorySpend: DashboardChartDatum[];
 }
 
+export type LedgerBreakdownField =
+  | 'id'
+  | 'date'
+  | 'month'
+  | 'supplier'
+  | 'status'
+  | 'executionStatus'
+  | 'inboundStatus'
+  | 'code'
+  | 'name'
+  | 'spec'
+  | 'category'
+  | 'unit'
+  | 'customerName'
+  | 'sourceOrderId'
+  | 'transportMethod'
+  | 'settlementType'
+  | 'deliveryDate';
+
+export type LedgerBreakdownMetric = 'amount' | 'quantity' | 'taxAmount' | 'lineCount' | 'orderCount';
+
+export interface LedgerBreakdownOptions {
+  groupBy: LedgerBreakdownField;
+  metric: LedgerBreakdownMetric;
+  limit?: number;
+}
+
 interface BuildDashboardMetricsOptions {
   categoryLimit?: number;
   supplierLimit?: number;
@@ -33,25 +60,6 @@ function getLineGrossAmount(orderedQty: unknown, price: unknown): number {
   return qty * unitPrice;
 }
 
-function normalizeCategory(rawCategory: unknown): string {
-  const category = String(rawCategory || '').trim();
-  if (!category || category === '其它') return '其他';
-
-  const hasNumber = /\d/.test(category);
-  const looksLikeSpecOrDepartment =
-    /规格|事业部|部门|^NO\.?/i.test(category) ||
-    (hasNumber && (
-      /[宽高长厚Φφ*×/]/.test(category) ||
-      /(mm|cm|kg|g|pcs)/i.test(category)
-    ));
-
-  if (looksLikeSpecOrDepartment) {
-    return '其他';
-  }
-
-  return category.length <= 8 ? category : '其他';
-}
-
 function addAmount(target: Record<string, number>, key: string, amount: number): void {
   if (amount <= 0) return;
   target[key] = (target[key] || 0) + amount;
@@ -71,6 +79,59 @@ function limitCategoryData(data: DashboardChartDatum[], limit: number): Dashboar
   return otherValue > 0 ? [...top, { name: '其他', value: otherValue }] : top;
 }
 
+function getGroupValue(po: PurchaseOrder, item: PurchaseOrder['items'][number], field: LedgerBreakdownField): string {
+  if (field === 'month') return String(po.date || '').substring(0, 7) || '空白';
+  if (field === 'id') return po.id || '空白';
+  if (field === 'date') return po.date || '空白';
+  if (field === 'supplier') return po.supplier || '空白';
+  if (field === 'status') return po.status || '空白';
+  if (field === 'executionStatus') return po.executionStatus || '空白';
+  if (field === 'inboundStatus') return po.inboundStatus || '空白';
+  if (field === 'transportMethod') return po.transportMethod || '空白';
+  if (field === 'settlementType') return po.settlementType || '空白';
+  if (field === 'deliveryDate') return po.deliveryDate || '空白';
+  return String(item[field] || '').trim() || '空白';
+}
+
+function getMetricValue(
+  po: PurchaseOrder,
+  item: PurchaseOrder['items'][number],
+  metric: LedgerBreakdownMetric,
+  seenOrdersByGroup: Record<string, Set<string>>,
+  groupName: string,
+): number {
+  if (metric === 'amount') return getLineGrossAmount(item.orderedQty, item.price);
+  if (metric === 'quantity') return Math.max(0, toFiniteNumber(item.orderedQty));
+  if (metric === 'taxAmount') return Math.max(0, toFiniteNumber(item.taxAmount));
+  if (metric === 'lineCount') return 1;
+  if (metric === 'orderCount') {
+    if (!seenOrdersByGroup[groupName]) seenOrdersByGroup[groupName] = new Set();
+    const before = seenOrdersByGroup[groupName].size;
+    seenOrdersByGroup[groupName].add(po.id);
+    return seenOrdersByGroup[groupName].size > before ? 1 : 0;
+  }
+  return 0;
+}
+
+export function buildLedgerBreakdown(
+  purchaseOrders: PurchaseOrder[],
+  options: LedgerBreakdownOptions,
+): DashboardChartDatum[] {
+  const limit = options.limit ?? 8;
+  const data: Record<string, number> = {};
+  const seenOrdersByGroup: Record<string, Set<string>> = {};
+
+  for (const po of purchaseOrders) {
+    for (const item of po.items) {
+      const groupName = getGroupValue(po, item, options.groupBy);
+      const value = getMetricValue(po, item, options.metric, seenOrdersByGroup, groupName);
+      addAmount(data, groupName, value);
+    }
+  }
+
+  return limitCategoryData(toSortedChartData(data), limit);
+}
+
 export function buildDashboardMetrics(
   purchaseOrders: PurchaseOrder[],
   options: BuildDashboardMetricsOptions = {},
@@ -83,27 +144,16 @@ export function buildDashboardMetrics(
   let totalAmount = 0;
 
   for (const po of purchaseOrders) {
-    const grossLineAmounts = po.items.map(item => getLineGrossAmount(item.orderedQty, item.price));
-    const grossTotal = grossLineAmounts.reduce((sum, amount) => sum + amount, 0);
-    if (grossTotal <= 0) continue;
-
-    const discountRate = Math.max(0, Math.min(100, toFiniteNumber(po.discountRate)));
-    const afterRateTotal = grossTotal * (1 - discountRate / 100);
-    const discountAmount = Math.max(0, Math.min(afterRateTotal, toFiniteNumber(po.discountAmount)));
-    const netTotal = roundCurrency(Math.max(0, afterRateTotal - discountAmount));
-    if (netTotal <= 0) continue;
-
     const month = String(po.date || '').substring(0, 7) || '未知月份';
     const supplier = String(po.supplier || '').trim() || '未知供应商';
-    addAmount(monthlyData, month, netTotal);
-    addAmount(supplierData, supplier, netTotal);
-    totalAmount += netTotal;
 
-    po.items.forEach((item, index) => {
-      const grossLineAmount = grossLineAmounts[index] || 0;
+    po.items.forEach(item => {
+      const grossLineAmount = getLineGrossAmount(item.orderedQty, item.price);
       if (grossLineAmount <= 0) return;
-      const proportionalNetAmount = roundCurrency(netTotal * (grossLineAmount / grossTotal));
-      addAmount(categoryData, normalizeCategory(item.category), proportionalNetAmount);
+      addAmount(monthlyData, month, grossLineAmount);
+      addAmount(supplierData, supplier, grossLineAmount);
+      addAmount(categoryData, String(item.category || '').trim() || '空白', grossLineAmount);
+      totalAmount += grossLineAmount;
     });
   }
 

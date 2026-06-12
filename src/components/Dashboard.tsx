@@ -14,7 +14,9 @@ import {
   Star,
   GripHorizontal,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { 
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, 
@@ -35,7 +37,12 @@ import {
   useStoredItemFields,
   type ItemFieldKey,
 } from './PODetailDrawer';
-import { buildDashboardMetrics } from '../utils/dashboardMetrics';
+import {
+  buildDashboardMetrics,
+  buildLedgerBreakdown,
+  type LedgerBreakdownField,
+  type LedgerBreakdownMetric,
+} from '../utils/dashboardMetrics';
 
 interface DashboardProps {
   purchaseOrders: PurchaseOrder[];
@@ -47,6 +54,48 @@ interface DashboardProps {
 }
 
 const COLORS = ['#2563EB', '#F97316', '#10B981', '#6366F1', '#8B5CF6', '#EC4899'];
+type AnalysisChartType = 'bar' | 'pie' | 'line';
+type DashboardAnalysisConfig = {
+  id: string;
+  title: string;
+  groupBy: LedgerBreakdownField;
+  metric: LedgerBreakdownMetric;
+  chartType: AnalysisChartType;
+  limit: number;
+};
+
+const FIELD_OPTIONS: { value: LedgerBreakdownField; label: string }[] = [
+  { value: 'month', label: '单据月份' },
+  { value: 'date', label: '单据日期' },
+  { value: 'supplier', label: '供应商' },
+  { value: 'category', label: '商品类别' },
+  { value: 'name', label: '商品名称' },
+  { value: 'code', label: '商品编码' },
+  { value: 'spec', label: '规格型号' },
+  { value: 'unit', label: '单位' },
+  { value: 'status', label: '单据状态' },
+  { value: 'executionStatus', label: '执行状态' },
+  { value: 'inboundStatus', label: '入库状态' },
+  { value: 'customerName', label: '客户名称' },
+  { value: 'sourceOrderId', label: '源单单号' },
+  { value: 'transportMethod', label: '运输方式' },
+  { value: 'settlementType', label: '结算方式' },
+  { value: 'deliveryDate', label: '交货日期' },
+];
+
+const METRIC_OPTIONS: { value: LedgerBreakdownMetric; label: string }[] = [
+  { value: 'amount', label: '金额: 数量×实际含税单价' },
+  { value: 'quantity', label: '数量合计' },
+  { value: 'taxAmount', label: '税额合计' },
+  { value: 'lineCount', label: '物料行数' },
+  { value: 'orderCount', label: '订单数' },
+];
+
+const DEFAULT_ANALYSIS_CONFIGS: Record<string, DashboardAnalysisConfig> = {
+  trend: { id: 'trend', title: '采购金额趋势分析', groupBy: 'month', metric: 'amount', chartType: 'line', limit: 12 },
+  supplier: { id: 'supplier', title: '核心供应商排行', groupBy: 'supplier', metric: 'amount', chartType: 'bar', limit: 5 },
+  category: { id: 'category', title: '自定义分类汇总', groupBy: 'category', metric: 'amount', chartType: 'pie', limit: 8 },
+};
 const DEFAULT_VISIBLE_FIELDS: DashboardViewSettings['visibleFields'] = {
   supplier: true,
   dates: true,
@@ -82,7 +131,8 @@ const DEFAULT_MODULE_WIDTHS: DashboardViewSettings['moduleWidths'] = {
   supplier: 1,
   category: 1,
   gantt: 2,
-  warnings: 3
+  warnings: 3,
+  custom: 1
 };
 
 function isDashboardCols(value: unknown): value is 1 | 2 | 3 | 4 {
@@ -131,9 +181,86 @@ function sanitizeModuleOrder(value: unknown): string[] {
   }
 
   const knownModules = new Set(DEFAULT_MODULE_ORDER);
-  const ordered = value.filter(moduleId => knownModules.has(moduleId));
+  const ordered = value.filter(moduleId => knownModules.has(moduleId) || moduleId.startsWith('custom-'));
   const missing = DEFAULT_MODULE_ORDER.filter(moduleId => !ordered.includes(moduleId));
   return [...ordered, ...missing];
+}
+
+function isBreakdownField(value: unknown): value is LedgerBreakdownField {
+  return FIELD_OPTIONS.some(option => option.value === value);
+}
+
+function isBreakdownMetric(value: unknown): value is LedgerBreakdownMetric {
+  return METRIC_OPTIONS.some(option => option.value === value);
+}
+
+function isChartType(value: unknown): value is AnalysisChartType {
+  return value === 'bar' || value === 'pie' || value === 'line';
+}
+
+function sanitizeAnalysisConfig(value: unknown, fallback: DashboardAnalysisConfig): DashboardAnalysisConfig {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return fallback;
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    id: typeof record.id === 'string' ? record.id : fallback.id,
+    title: typeof record.title === 'string' && record.title.trim() ? record.title.trim() : fallback.title,
+    groupBy: isBreakdownField(record.groupBy) ? record.groupBy : fallback.groupBy,
+    metric: isBreakdownMetric(record.metric) ? record.metric : fallback.metric,
+    chartType: isChartType(record.chartType) ? record.chartType : fallback.chartType,
+    limit: typeof record.limit === 'number' && Number.isFinite(record.limit)
+      ? Math.max(3, Math.min(20, Math.round(record.limit)))
+      : fallback.limit,
+  };
+}
+
+function sanitizeAnalysisConfigs(value: unknown): Record<string, DashboardAnalysisConfig> {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const next: Record<string, DashboardAnalysisConfig> = {};
+  for (const [id, fallback] of Object.entries(DEFAULT_ANALYSIS_CONFIGS)) {
+    next[id] = sanitizeAnalysisConfig(source[id], fallback);
+  }
+  for (const [id, raw] of Object.entries(source)) {
+    if (id.startsWith('custom-')) {
+      next[id] = sanitizeAnalysisConfig(raw, {
+        id,
+        title: '自定义分析模块',
+        groupBy: 'category',
+        metric: 'amount',
+        chartType: 'bar',
+        limit: 8,
+      });
+    }
+  }
+  return next;
+}
+
+function sanitizeCustomAnalysisModules(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((id): id is string => typeof id === 'string' && id.startsWith('custom-'));
+}
+
+function getMetricLabel(metric: LedgerBreakdownMetric): string {
+  return METRIC_OPTIONS.find(option => option.value === metric)?.label || metric;
+}
+
+function getFieldLabel(field: LedgerBreakdownField): string {
+  return FIELD_OPTIONS.find(option => option.value === field)?.label || field;
+}
+
+function toFiniteNumber(value: unknown): number {
+  const numberValue = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+function getLineAmount(item: PurchaseOrder['items'][number]): number {
+  return Math.max(0, toFiniteNumber(item.orderedQty)) * Math.max(0, toFiniteNumber(item.price));
+}
+
+function getOrderAmount(po: PurchaseOrder): number {
+  return po.items.reduce((sum, item) => sum + getLineAmount(item), 0);
 }
 
 const CustomYAxisTick = (props: any) => {
@@ -215,6 +342,25 @@ export default function Dashboard({
 
   const dashboardMetrics = useMemo(() => buildDashboardMetrics(purchaseOrders), [purchaseOrders]);
   const { totalAmount, monthlySpend, supplierSpend, categorySpend } = dashboardMetrics;
+  const [analysisConfigs, setAnalysisConfigs] = useState<Record<string, DashboardAnalysisConfig>>((() => {
+    const saved = localStorage.getItem('dashboard_analysis_configs');
+    if (saved) {
+      try {
+        return sanitizeAnalysisConfigs(JSON.parse(saved));
+      } catch (e) {}
+    }
+    return sanitizeAnalysisConfigs(DEFAULT_ANALYSIS_CONFIGS);
+  })());
+  const [customAnalysisModules, setCustomAnalysisModules] = useState<string[]>((() => {
+    const saved = localStorage.getItem('dashboard_custom_analysis_modules');
+    if (saved) {
+      try {
+        return sanitizeCustomAnalysisModules(JSON.parse(saved));
+      } catch (e) {}
+    }
+    return [];
+  })());
+  const [openAnalysisConfigId, setOpenAnalysisConfigId] = useState<string | null>(null);
 
   const [ganttFilter, setGanttFilter] = useState<'all' | 'starred'>('all');
   const [showGanttConfig, setShowGanttConfig] = useState(false);
@@ -224,6 +370,8 @@ export default function Dashboard({
   })());
 
   useEffect(() => { localStorage.setItem('dashboard_gantt_fields', JSON.stringify(ganttFields)); }, [ganttFields]);
+  useEffect(() => { localStorage.setItem('dashboard_analysis_configs', JSON.stringify(analysisConfigs)); }, [analysisConfigs]);
+  useEffect(() => { localStorage.setItem('dashboard_custom_analysis_modules', JSON.stringify(customAnalysisModules)); }, [customAnalysisModules]);
 
   // Gantt Chart logic natively rendering HTML elements
   const ganttData = useMemo(() => {
@@ -257,7 +405,7 @@ export default function Dashboard({
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length === 6) return parsed;
+        if (Array.isArray(parsed)) return sanitizeModuleOrder(parsed);
       } catch (e) {}
     }
     return DEFAULT_MODULE_ORDER;
@@ -304,6 +452,8 @@ export default function Dashboard({
         setGanttFields(sanitizeBooleanFlags(settings.ganttFields, DEFAULT_GANTT_FIELDS));
         setModuleOrder(sanitizeModuleOrder(settings.moduleOrder));
         setModuleWidths(sanitizeModuleWidths(settings.moduleWidths));
+        setAnalysisConfigs(sanitizeAnalysisConfigs(settings.analysisConfigs));
+        setCustomAnalysisModules(sanitizeCustomAnalysisModules(settings.customAnalysisModules));
       })
       .catch(error => {
         console.warn('Failed to load dashboard settings from CloudBase:', error);
@@ -332,6 +482,8 @@ export default function Dashboard({
       ganttFields,
       moduleOrder,
       moduleWidths,
+      analysisConfigs,
+      customAnalysisModules,
     };
 
     const timer = window.setTimeout(() => {
@@ -341,13 +493,61 @@ export default function Dashboard({
     }, 600);
 
     return () => window.clearTimeout(timer);
-  }, [authUser, timelineCols, visibleFields, drawerCols, drawerFields, ganttFields, moduleOrder, moduleWidths]);
+  }, [authUser, timelineCols, visibleFields, drawerCols, drawerFields, ganttFields, moduleOrder, moduleWidths, analysisConfigs, customAnalysisModules]);
 
   const adjustWidth = (id: string, delta: number) => {
     setModuleWidths(prev => {
       const current = prev[id] || 1;
       const newWidth = Math.max(1, Math.min(3, current + delta));
       return { ...prev, [id]: newWidth };
+    });
+  };
+
+  const updateAnalysisConfig = (id: string, patch: Partial<DashboardAnalysisConfig>) => {
+    setAnalysisConfigs(prev => {
+      const fallback = prev[id] || DEFAULT_ANALYSIS_CONFIGS[id] || {
+        id,
+        title: '自定义分析模块',
+        groupBy: 'category',
+        metric: 'amount',
+        chartType: 'bar',
+        limit: 8,
+      };
+      return {
+        ...prev,
+        [id]: sanitizeAnalysisConfig({ ...fallback, ...patch, id }, fallback),
+      };
+    });
+  };
+
+  const addCustomAnalysisModule = () => {
+    const id = `custom-${Date.now()}`;
+    const nextConfig: DashboardAnalysisConfig = {
+      id,
+      title: `自定义分析 ${customAnalysisModules.length + 1}`,
+      groupBy: 'category',
+      metric: 'amount',
+      chartType: 'bar',
+      limit: 8,
+    };
+    setCustomAnalysisModules(prev => [...prev, id]);
+    setAnalysisConfigs(prev => ({ ...prev, [id]: nextConfig }));
+    setModuleOrder(prev => [...prev, id]);
+    setModuleWidths(prev => ({ ...prev, [id]: 1 }));
+  };
+
+  const removeCustomAnalysisModule = (id: string) => {
+    setCustomAnalysisModules(prev => prev.filter(moduleId => moduleId !== id));
+    setModuleOrder(prev => prev.filter(moduleId => moduleId !== id));
+    setModuleWidths(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setAnalysisConfigs(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
     });
   };
 
@@ -378,6 +578,159 @@ export default function Dashboard({
       newOrder.splice(targetIdx, 0, draggedModule);
       return newOrder;
     });
+  };
+
+  const renderAnalysisChart = (config: DashboardAnalysisConfig) => {
+    const data = buildLedgerBreakdown(purchaseOrders, {
+      groupBy: config.groupBy,
+      metric: config.metric,
+      limit: config.limit,
+    });
+    const valueLabel = getMetricLabel(config.metric);
+
+    if (data.length === 0) {
+      return (
+        <div className="h-64 flex items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-xs font-bold text-slate-400">
+          暂无可汇总数据
+        </div>
+      );
+    }
+
+    if (config.chartType === 'pie') {
+      return (
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+          <PieChart>
+            <Pie data={data} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={5} dataKey="value" stroke="none">
+              {data.map((entry, index) => (
+                <Cell key={`${config.id}-pie-${entry.name}`} fill={COLORS[index % COLORS.length]} />
+              ))}
+            </Pie>
+            <RechartsTooltip
+              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }}
+              formatter={(value: number) => [config.metric === 'amount' ? `¥${value.toLocaleString()}` : value.toLocaleString(), valueLabel]}
+            />
+            <Legend layout="horizontal" verticalAlign="bottom" align="center" wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }}/>
+          </PieChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    if (config.chartType === 'line') {
+      const lineData = [...data].sort((a, b) => a.name.localeCompare(b.name));
+      return (
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+          <LineChart data={lineData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748B' }} dy={10} />
+            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748B' }} width={80} tickFormatter={(val) => config.metric === 'amount' ? `¥${(Number(val)/10000).toFixed(1)}w` : String(val)} />
+            <RechartsTooltip
+              cursor={{ stroke: '#94A3B8', strokeWidth: 1, strokeDasharray: '4 4' }}
+              contentStyle={{ borderRadius: '8px', border: '1px solid #E2E8F0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }}
+              formatter={(value: number) => [config.metric === 'amount' ? `¥${value.toLocaleString()}` : value.toLocaleString(), valueLabel]}
+            />
+            <Line type="monotone" dataKey="value" stroke="#2563EB" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    return (
+      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+        <BarChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E2E8F0" />
+          <XAxis type="number" hide />
+          <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={<CustomYAxisTick />} width={150} interval={0} />
+          <RechartsTooltip
+            cursor={{ fill: '#F1F5F9' }}
+            contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }}
+            formatter={(value: number) => [config.metric === 'amount' ? `¥${value.toLocaleString()}` : value.toLocaleString(), valueLabel]}
+          />
+          <Bar dataKey="value" fill="#3B82F6" radius={[0, 4, 4, 0]} barSize={24}>
+            {data.map((entry, index) => (
+              <Cell key={`${config.id}-bar-${entry.name}`} fill={COLORS[index % COLORS.length]} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    );
+  };
+
+  const renderAnalysisModule = (id: string) => {
+    const config = analysisConfigs[id] || DEFAULT_ANALYSIS_CONFIGS[id] || {
+      id,
+      title: '自定义分析模块',
+      groupBy: 'category',
+      metric: 'amount',
+      chartType: 'bar',
+      limit: 8,
+    };
+    const isCustom = id.startsWith('custom-');
+
+    return (
+      <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm h-full space-y-4 pointer-events-auto">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="space-y-0.5 min-w-0">
+            <h3 className="text-sm font-bold uppercase tracking-tight text-slate-850 truncate">{config.title}</h3>
+            <p className="text-[10px] font-mono text-slate-500 uppercase">
+              {getFieldLabel(config.groupBy)} / {getMetricLabel(config.metric)}
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setOpenAnalysisConfigId(openAnalysisConfigId === id ? null : id)}
+              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
+              title="配置分析字段"
+            >
+              <Sliders className="w-4 h-4" />
+            </button>
+            {isCustom && (
+              <button
+                type="button"
+                onClick={() => removeCustomAnalysisModule(id)}
+                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                title="删除自定义模块"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {openAnalysisConfigId === id && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <input
+              value={config.title}
+              onChange={event => updateAnalysisConfig(id, { title: event.target.value })}
+              className="sm:col-span-2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 outline-none focus:border-blue-400"
+            />
+            <select value={config.groupBy} onChange={event => updateAnalysisConfig(id, { groupBy: event.target.value as LedgerBreakdownField })} className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700">
+              {FIELD_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            <select value={config.metric} onChange={event => updateAnalysisConfig(id, { metric: event.target.value as LedgerBreakdownMetric })} className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700">
+              {METRIC_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            <select value={config.chartType} onChange={event => updateAnalysisConfig(id, { chartType: event.target.value as AnalysisChartType })} className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700">
+              <option value="bar">横向柱状图</option>
+              <option value="pie">环形占比图</option>
+              <option value="line">折线趋势图</option>
+            </select>
+            <input
+              type="number"
+              min={3}
+              max={20}
+              value={config.limit}
+              onChange={event => updateAnalysisConfig(id, { limit: Number(event.target.value) })}
+              className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 outline-none focus:border-blue-400"
+            />
+          </div>
+        )}
+
+        <div className="h-64 mt-4 w-full">
+          {renderAnalysisChart(config)}
+        </div>
+      </div>
+    );
   };
 
   const modulesMap = {
@@ -453,95 +806,15 @@ export default function Dashboard({
     },
     'trend': {
       colSpan: 'col-span-1 lg:col-span-2 xl:col-span-2 transition-transform duration-300',
-      content: (
-        <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm h-full space-y-4 pointer-events-auto">
-          <div className="space-y-0.5 border-b border-slate-100 pb-3">
-            <h3 className="text-sm font-bold uppercase tracking-tight text-slate-850">采购金额趋势分析 / PURCHASING TREND</h3>
-            <p className="text-[10px] font-mono text-slate-500 uppercase">月度总计开销走势</p>
-          </div>
-          <div className="h-64 mt-4 w-full">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-              <LineChart data={monthlySpend} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748B' }} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748B' }} width={80} tickFormatter={(val) => `¥${(val/10000).toFixed(1)}w`} />
-                <RechartsTooltip 
-                  cursor={{ stroke: '#94A3B8', strokeWidth: 1, strokeDasharray: '4 4' }}
-                  contentStyle={{ borderRadius: '8px', border: '1px solid #E2E8F0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }}
-                  formatter={(value: number) => [`¥${value.toLocaleString()}`, '金额']}
-                />
-                <Line type="monotone" dataKey="value" stroke="#2563EB" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )
+      content: renderAnalysisModule('trend')
     },
     'supplier': {
       colSpan: 'col-span-1 transition-transform duration-300',
-      content: (
-        <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm h-full space-y-4 pointer-events-auto">
-          <div className="space-y-0.5 border-b border-slate-100 pb-3">
-            <h3 className="text-sm font-bold uppercase tracking-tight text-slate-850">核心供应商排行 / TOP SUPPLIERS</h3>
-            <p className="text-[10px] font-mono text-slate-500 uppercase">依采购规模排序前5名</p>
-          </div>
-          <div className="h-64 mt-4 w-full">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-              <BarChart data={supplierSpend} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E2E8F0" />
-                <XAxis type="number" hide />
-                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={<CustomYAxisTick />} width={150} interval={0} />
-                <RechartsTooltip 
-                  cursor={{ fill: '#F1F5F9' }}
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }}
-                  formatter={(value: number) => [`¥${value.toLocaleString()}`, '金额']}
-                />
-                <Bar dataKey="value" fill="#3B82F6" radius={[0, 4, 4, 0]} barSize={24}>
-                  {supplierSpend.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )
+      content: renderAnalysisModule('supplier')
     },
     'category': {
       colSpan: 'col-span-1 transition-transform duration-300',
-      content: (
-        <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm h-full space-y-4 pointer-events-auto">
-          <div className="space-y-0.5 border-b border-slate-100 pb-3">
-            <h3 className="text-sm font-bold uppercase tracking-tight text-slate-850">物料种类占比 / SPEND BY CATEGORY</h3>
-            <p className="text-[10px] font-mono text-slate-500 uppercase">投入资金的物料结构</p>
-          </div>
-          <div className="h-64 mt-4 w-full relative">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-              <PieChart>
-                <Pie
-                  data={categorySpend}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={90}
-                  paddingAngle={5}
-                  dataKey="value"
-                  stroke="none"
-                >
-                  {categorySpend.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <RechartsTooltip 
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }}
-                  formatter={(value: number) => [`¥${value.toLocaleString()}`, '金额']}
-                />
-                <Legend layout="horizontal" verticalAlign="bottom" align="center" wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }}/>
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )
+      content: renderAnalysisModule('category')
     },
     'gantt': {
       colSpan: 'col-span-1 lg:col-span-2 xl:col-span-2 transition-transform duration-300',
@@ -622,7 +895,7 @@ export default function Dashboard({
                     )}
                     {ganttFields.amount && (
                       <span className="text-[10px] px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded font-mono font-bold">
-                        ¥{po.items.reduce((sum, item) => sum + (item.orderedQty * item.price), 0).toLocaleString()}
+                        ¥{getOrderAmount(po).toLocaleString()}
                       </span>
                     )}
                   </div>
@@ -797,25 +1070,45 @@ export default function Dashboard({
       )
     }
   };
+  const getModuleContent = (id: string) => {
+    if (id.startsWith('custom-')) {
+      return {
+        colSpan: 'col-span-1 transition-transform duration-300',
+        content: renderAnalysisModule(id),
+      };
+    }
+    return modulesMap[id as keyof typeof modulesMap];
+  };
 
   return (
     <div className="space-y-6 pb-12">
       
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h2 className="text-xl font-bold tracking-tight text-slate-800">采购综合分析</h2>
-        {dateRange && (
-          <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg shadow-sm">
-            <Calendar className="w-4 h-4 shrink-0" />
-            <span className="text-xs font-semibold font-mono tracking-tight uppercase">
-              当前数据范围: {dateRange.start} <span className="text-indigo-400 font-sans mx-0.5">至</span> {dateRange.end}
-            </span>
+        <div className="flex items-center gap-2">
+          {dateRange && (
+            <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg shadow-sm">
+              <Calendar className="w-4 h-4 shrink-0" />
+              <span className="text-xs font-semibold font-mono tracking-tight uppercase">
+                当前数据范围: {dateRange.start} <span className="text-indigo-400 font-sans mx-0.5">至</span> {dateRange.end}
+              </span>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={addCustomAnalysisModule}
+            className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-slate-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            添加自定义模块
+          </button>
           </div>
-        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
         {moduleOrder.map(id => {
-          const mod = modulesMap[id as keyof typeof modulesMap];
+          const mod = getModuleContent(id);
+          if (!mod) return null;
           const widthInfo = moduleWidths[id] || 1;
           const colSpanClass = getColSpanClass(widthInfo);
           return (
@@ -1086,7 +1379,7 @@ export default function Dashboard({
                         </div>
                       );
                     }
-                    const totalPOAmount = selectedPO.items.reduce((sum, item) => sum + (item.orderedQty * item.price), 0);
+                    const totalPOAmount = getOrderAmount(selectedPO);
                     return (
                       <div className="space-y-6 animate-in fade-in duration-200">
                         {/* Meta Grid displaying fields according to columns selected */}
@@ -1269,7 +1562,7 @@ export default function Dashboard({
                         }
                       })
                       .map(po => {
-                        const totalPOAmount = po.items.reduce((sum, item) => sum + (item.orderedQty * item.price), 0);
+                        const totalPOAmount = getOrderAmount(po);
                         return (
                           <div 
                             key={po.id} 

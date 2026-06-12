@@ -47,6 +47,8 @@ export type DashboardViewSettings = {
   ganttFields: Record<string, boolean>;
   moduleOrder: string[];
   moduleWidths: Record<string, number>;
+  analysisConfigs?: Record<string, unknown>;
+  customAnalysisModules?: unknown[];
 };
 
 export type LedgerViewSettings = {
