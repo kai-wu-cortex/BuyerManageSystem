@@ -296,6 +296,8 @@ export default function App() {
 
   // Procurement Datasets with CloudBase synchronization
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const purchaseOrdersRef = useRef(purchaseOrders);
+  purchaseOrdersRef.current = purchaseOrders;
   const [ledgerRevision, setLedgerRevision] = useState(0);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [samples, setSamples] = useState<SampleRecord[]>([]);
@@ -478,13 +480,14 @@ export default function App() {
 
   // Sync state values on changes directly to CloudBase
   const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
+    const preparedOrders = preparePurchaseOrdersForState(updatedOrders);
+    purchaseOrdersRef.current = preparedOrders;
+    setPurchaseOrders(preparedOrders);
+    setLedgerRevision(revision => revision + 1);
     try {
-      const preparedOrders = preparePurchaseOrdersForState(updatedOrders);
       localStorage.setItem("purchase_orders", JSON.stringify(preparedOrders));
-      setPurchaseOrders(preparedOrders);
-      setLedgerRevision(revision => revision + 1);
     } catch (error) {
-      console.error(error);
+      console.warn("localStorage write failed (purchase_orders):", error);
     }
   };
 
@@ -864,7 +867,7 @@ export default function App() {
 
       if (Array.isArray(parsedOrders) && parsedOrders.length > 0) {
         // 按订单编号 (CGDD-) 合并，保留旧台账独有订单及其星标，避免数据/星标丢失
-        const { merged, stats } = mergePurchaseOrdersById(purchaseOrders, parsedOrders);
+        const { merged, stats } = mergePurchaseOrdersById(purchaseOrdersRef.current, parsedOrders);
         handleUpdateOrders(merged);
         alert(
           `🎉 成功解析并合并本地台账：\n` +
@@ -930,7 +933,7 @@ export default function App() {
       }
       const parsedOrders = await loadLedgerBackupOrders(backupToLoad);
       if (Array.isArray(parsedOrders)) {
-        const { merged, stats } = mergePurchaseOrdersById(purchaseOrders, parsedOrders);
+        const { merged, stats } = mergePurchaseOrdersById(purchaseOrdersRef.current, parsedOrders);
         handleUpdateOrders(merged);
         markLedgerBackupLoaded(backupToLoad.rawTime);
         setLatestRemoteLedgerBackup(current => {

@@ -354,19 +354,19 @@ export async function listDocuments<T>(collectionName: CollectionName, options?:
     url.searchParams.set('sizeFields', options.sizeFields.join(','));
   }
   const path = url.pathname + (url.search ? url.search : '');
-  const response = await fetch(path);
+  const response = await fetch(path, { cache: 'no-store' });
   return readJsonResponse<T[]>(response, collectionName);
 }
 
 export async function getDocument<T>(collectionName: CollectionName, documentId: string): Promise<T | null> {
   const path = getDataApiPath(collectionName, documentId);
-  const response = await fetch(path);
+  const response = await fetch(path, { cache: 'no-store' });
   return readJsonResponse<T | null>(response, path);
 }
 
 async function listDocumentIds(collectionName: CollectionName): Promise<string[]> {
   const path = `${getDataApiPath(collectionName)}?includeIds=true`;
-  const response = await fetch(path);
+  const response = await fetch(path, { cache: 'no-store' });
   return readJsonResponse<string[]>(response, collectionName);
 }
 
@@ -557,13 +557,20 @@ export async function loadLedgerBackupOrders(backup: LedgerBackup): Promise<Purc
   const chunkPromises = Array.from({ length: chunkCount }, (_, index) => (
     getDocument<LedgerBackupChunk>('ledger_backup_chunks', `${backup.id}_chunk_${String(index).padStart(4, '0')}`)
   ));
-  const chunks = await Promise.all(chunkPromises);
-  if (chunks.some(chunk => !chunk || !Array.isArray(chunk.orders))) {
+  const results = await Promise.allSettled(chunkPromises);
+  const chunks = results
+    .filter((r): r is PromiseFulfilledResult<LedgerBackupChunk | null> => r.status === 'fulfilled')
+    .map(r => r.value);
+
+  const validChunks = chunks.filter(
+    (chunk): chunk is LedgerBackupChunk => Boolean(chunk) && Array.isArray(chunk.orders),
+  );
+
+  if (validChunks.length === 0) {
     return null;
   }
 
-  return chunks
-    .filter((chunk): chunk is LedgerBackupChunk => Boolean(chunk))
+  return validChunks
     .sort((a, b) => a.chunkIndex - b.chunkIndex)
     .flatMap(chunk => chunk.orders);
 }
