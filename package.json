@@ -15,6 +15,7 @@
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
+    "@vercel/blob": "^2.4.0",
     "@vercel/functions": "^3.7.0",
     "@vitejs/plugin-react": "^5.0.4",
     "compression": "^1.8.1",
