@@ -35,6 +35,7 @@ import {
   useStoredItemFields,
   type ItemFieldKey,
 } from './PODetailDrawer';
+import { buildDashboardMetrics } from '../utils/dashboardMetrics';
 
 interface DashboardProps {
   purchaseOrders: PurchaseOrder[];
@@ -208,54 +209,12 @@ export default function Dashboard({
     };
   }, [purchaseOrders]);
 
-  const totalAmount = purchaseOrders.reduce((sum, po) => {
-    const poSum = po.items.reduce((itemSum, item) => itemSum + (item.orderedQty * item.price), 0);
-    return sum + poSum;
-  }, 0);
-
   const pendingInboundCount = purchaseOrders.filter(po => po.inboundStatus !== '全部入库').length;
   // 未审核通常指待签发，但在途订单定义为正在执行且未全部入库
   const inTransitCount = purchaseOrders.filter(po => po.executionStatus !== '未执行' && po.inboundStatus !== '全部入库').length;
 
-  // Chart Data: Monthly Spend (Line Chart)
-  const monthlySpend = useMemo(() => {
-    const data: Record<string, number> = {};
-    purchaseOrders.forEach(po => {
-      const month = po.date.substring(0, 7); 
-      if (!data[month]) data[month] = 0;
-      data[month] += po.items.reduce((s, item) => s + (item.orderedQty * item.price), 0);
-    });
-    return Object.entries(data)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, value]) => ({ name, value }));
-  }, [purchaseOrders]);
-
-  // Chart Data: Top Suppliers (Bar Chart)
-  const supplierSpend = useMemo(() => {
-    const data: Record<string, number> = {};
-    purchaseOrders.forEach(po => {
-      if (!data[po.supplier]) data[po.supplier] = 0;
-      data[po.supplier] += po.items.reduce((s, item) => s + (item.orderedQty * item.price), 0);
-    });
-    return Object.entries(data)
-      .sort(([,a], [,b]) => b - a)
-      .slice(0, 5)
-      .map(([name, value]) => ({ name, value }));
-  }, [purchaseOrders]);
-
-  // Chart Data: Category Spend (Pie Chart)
-  const categorySpend = useMemo(() => {
-    const data: Record<string, number> = {};
-    purchaseOrders.forEach(po => {
-      po.items.forEach(item => {
-        if (!data[item.category]) data[item.category] = 0;
-        data[item.category] += item.orderedQty * item.price;
-      });
-    });
-    return Object.entries(data)
-      .sort(([,a], [,b]) => b - a)
-      .map(([name, value]) => ({ name, value }));
-  }, [purchaseOrders]);
+  const dashboardMetrics = useMemo(() => buildDashboardMetrics(purchaseOrders), [purchaseOrders]);
+  const { totalAmount, monthlySpend, supplierSpend, categorySpend } = dashboardMetrics;
 
   const [ganttFilter, setGanttFilter] = useState<'all' | 'starred'>('all');
   const [showGanttConfig, setShowGanttConfig] = useState(false);

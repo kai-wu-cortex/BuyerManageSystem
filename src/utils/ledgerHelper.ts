@@ -172,10 +172,12 @@ export function parseClipboardLine(line: string): { po: Partial<PurchaseOrder>, 
   const dateStr = date.trim();
   const supplierLower = supplier.toLowerCase();
 
+  const headerSupplierValues = new Set(["供应商", "供应商名称", "vendor", "supplier"]);
+
   if (
     idLower.includes("单据") || idLower.includes("编号") || idLower.includes("id") || idLower.includes("no") || idLower.includes("序号") || idLower.includes("目录") ||
     dateStr.includes("日期") || dateStr.includes("date") || dateStr.includes("time") ||
-    supplierLower.includes("供应商") || supplierLower.includes("supplier")
+    headerSupplierValues.has(supplierLower)
   ) {
     return null;
   }

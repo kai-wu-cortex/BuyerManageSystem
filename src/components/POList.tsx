@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PurchaseOrder, POStatus, PurchaseExecutionStatus, InboundStatus, OrderItem } from '../types';
 import { getFlatLedgerRows, FlatLedgerRow, parseClipboardLine } from '../utils/ledgerHelper';
+import { rowsToLedgerLines } from '../utils/ledgerImport';
 import { getLedgerRowsForView } from '../utils/ledgerView';
 import { SUPPLIER_MATERIAL_MAPPING } from '../utils/supplierMaterialMapping';
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
@@ -938,38 +939,7 @@ export default function POList({
         finalRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
       }
       
-      // Detec and remove header row
-      if (finalRows.length > 0) {
-        const firstRow = finalRows[0];
-        const headerKeywords = [
-          '编号', '单据', '日期', '供应商', '状态', '备注', '编码', '名称', '规格', '类别', 
-          '单位', '数量', '比例', '天数', '客户', '方式', '交货', 'ID', 'Date', 'Supplier', 
-          'Status', 'Qty', 'Price', 'Tax', 'Amount', 'Remark', 'Days', 'Rate', 'No', 'Code'
-        ];
-        
-        let matchCount = 0;
-        firstRow.forEach(cell => {
-          const text = String(cell || '').trim();
-          if (!text) return;
-          const isKeyword = headerKeywords.some(keyword => text.toLowerCase().includes(keyword.toLowerCase()));
-          if (isKeyword) {
-            matchCount++;
-          }
-        });
-
-        const firstCellText = String(firstRow[0] || '').trim().toLowerCase();
-        const firstIsHeader = ['单据', '单号', '编号', '序号', 'id', 'po', 'no', 'code', 'order'].some(k => firstCellText.includes(k));
-        
-        if (matchCount >= 3 || (firstRow.length >= 1 && firstIsHeader)) {
-          finalRows = finalRows.slice(1);
-        }
-      }
-
-      const lines = finalRows.map(row => row.map(cell => {
-        if (cell === null || cell === undefined) return '';
-        if (cell instanceof Date) return cell.toISOString().split('T')[0];
-        return cell.toString().replace(/\t|\n/g, ' ');
-      }).join('\t'));
+      const lines = rowsToLedgerLines(finalRows);
       
       // Before setting new data, we inform parent to clear old data if needed
       // but parent handleUpdateOrders already completely replaces the array.
