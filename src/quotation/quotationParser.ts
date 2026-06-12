@@ -42,17 +42,24 @@ const HEADER_ALIASES: Record<string, ParsedQuotationColumn> = {
   产品名称: 'sourceProductName',
   商品名称: 'sourceProductName',
   物料名称: 'sourceProductName',
+  '产品名称/编号': 'sourceProductName',
+  系列名称: 'sourceProductName',
   规格: 'sourceSpecification',
   规格型号: 'sourceSpecification',
+  厚度: 'sourceSpecification',
+  '内包装尺寸/容量': 'sourceSpecification',
   单位: 'sourceUnit',
   计量单位: 'sourceUnit',
   包装: 'sourcePackageDescription',
   包装说明: 'sourcePackageDescription',
+  包装方式: 'sourcePackageDescription',
   包装数量: 'sourcePackageQuantity',
   包装规格: 'sourcePackageQuantity',
+  箱规: 'sourcePackageQuantity',
   单价: 'sourceUnitPrice',
   含税单价: 'sourceUnitPrice',
   报价: 'sourceUnitPrice',
+  价格: 'sourceUnitPrice',
   moq: 'minimumOrderQuantity',
   最小起订量: 'minimumOrderQuantity',
   起订量: 'minimumOrderQuantity',
@@ -75,10 +82,7 @@ function normalizeHeader(value: unknown): string {
 }
 
 function findHeaderRow(rows: unknown[][]): number {
-  return rows.findIndex(row => row.some(cell => {
-    const header = normalizeHeader(cell);
-    return header === '产品名称' || header === '商品名称' || header === '物料名称';
-  }));
+  return rows.findIndex(row => row.some(cell => HEADER_ALIASES[normalizeHeader(cell)] === 'sourceProductName'));
 }
 
 function readMetadata(rows: unknown[][], headerIndex: number): Map<string, string> {
@@ -91,6 +95,102 @@ function readMetadata(rows: unknown[][], headerIndex: number): Map<string, strin
     }
   }
   return metadata;
+}
+
+function inferSupplierName(rows: unknown[][], headerIndex: number): string {
+  for (const row of rows.slice(0, Math.max(0, headerIndex))) {
+    const company = row.map(text).find(value => /公司|工厂|供应商/.test(value) && value.length >= 4);
+    if (company) {
+      return company
+        .split(/\s{2,}|\n/)
+        .map(value => value.trim())
+        .find(value => /公司|工厂|供应商/.test(value)) ?? company;
+    }
+  }
+  return '';
+}
+
+function inferPriceContext(rows: unknown[][], headerIndex: number): { currency: string; unit: string } {
+  const context = rows.slice(0, headerIndex + 1).flat().map(text).join(' ');
+  const unitMatch = context.match(/(?:\$|USD)?\s*\/\s*([a-zA-Z]+)/i);
+  return {
+    currency: /\$|USD/i.test(context) ? 'USD' : /￥|¥|CNY/i.test(context) ? 'CNY' : '',
+    unit: unitMatch?.[1]?.toUpperCase() ?? '',
+  };
+}
+
+function createEmptyItem(sourceRow: number): ParsedQuotationItem {
+  return {
+    sourceProductCode: '',
+    sourceProductName: '',
+    sourceSpecification: '',
+    sourceUnit: '',
+    sourcePackageDescription: '',
+    sourcePackageQuantity: null,
+    sourceUnitPrice: null,
+    minimumOrderQuantity: null,
+    lineLeadTimeDays: null,
+    fieldConfidence: { sourceRow },
+  };
+}
+
+function parseMatrixItems(
+  rows: unknown[][],
+  headerIndex: number,
+  headerMap: Map<number, ParsedQuotationColumn>,
+  inferredUnit: string,
+): ParsedQuotationItem[] {
+  if ([...headerMap.values()].includes('sourceUnitPrice')) return [];
+  const nameColumn = [...headerMap].find(([, field]) => field === 'sourceProductName')?.[0];
+  const specificationColumn = [...headerMap].find(([, field]) => field === 'sourceSpecification')?.[0];
+  if (nameColumn === undefined) return [];
+
+  const firstPriceColumn = Math.max(nameColumn, specificationColumn ?? nameColumn) + 1;
+  const followingRows = rows.slice(headerIndex + 1);
+  const priceColumns = rows[headerIndex]
+    .map((_, index) => index)
+    .filter(index => index >= firstPriceColumn)
+    .filter(index => followingRows.some(row => numberOrNull(row[index]) !== null));
+  if (priceColumns.length < 2) return [];
+
+  const topLabels: string[] = [];
+  let previousTopLabel = '';
+  rows[headerIndex].forEach((cell, index) => {
+    const value = text(cell);
+    if (value) previousTopLabel = value;
+    topLabels[index] = previousTopLabel;
+  });
+  const secondaryHeader = followingRows.find(row => (
+    !numberOrNull(row[nameColumn])
+    && priceColumns.some(index => text(row[index]) && numberOrNull(row[index]) === null)
+  ));
+
+  const items: ParsedQuotationItem[] = [];
+  let currentProductName = '';
+  for (let offset = 0; offset < followingRows.length; offset += 1) {
+    const row = followingRows[offset];
+    const rowProductName = text(row[nameColumn]);
+    if (rowProductName) currentProductName = rowProductName;
+    if (!currentProductName) continue;
+    const specification = specificationColumn === undefined ? '' : text(row[specificationColumn]);
+
+    for (const column of priceColumns) {
+      const price = numberOrNull(row[column]);
+      if (price === null) continue;
+      const secondaryLabel = secondaryHeader ? text(secondaryHeader[column]) : '';
+      const priceLabel = [topLabels[column], secondaryLabel].filter(Boolean).join(' · ');
+      items.push({
+        ...createEmptyItem(offset + headerIndex + 2),
+        sourceProductName: currentProductName,
+        sourceSpecification: specification,
+        sourceUnit: inferredUnit,
+        sourcePackageDescription: priceLabel,
+        sourcePackageQuantity: inferredUnit ? 1 : null,
+        sourceUnitPrice: price,
+      });
+    }
+  }
+  return items;
 }
 
 export function rowsToQuotationDraft(rows: unknown[][]): ParsedQuotation {
@@ -106,19 +206,10 @@ export function rowsToQuotationDraft(rows: unknown[][]): ParsedQuotation {
     if (field) headerMap.set(index, field);
   });
 
-  const items = rows.slice(headerIndex + 1).map((row, rowOffset) => {
-    const item: ParsedQuotationItem = {
-      sourceProductCode: '',
-      sourceProductName: '',
-      sourceSpecification: '',
-      sourceUnit: '',
-      sourcePackageDescription: '',
-      sourcePackageQuantity: null,
-      sourceUnitPrice: null,
-      minimumOrderQuantity: null,
-      lineLeadTimeDays: null,
-      fieldConfidence: { sourceRow: rowOffset + headerIndex + 2 },
-    };
+  const priceContext = inferPriceContext(rows, headerIndex);
+  const matrixItems = parseMatrixItems(rows, headerIndex, headerMap, priceContext.unit);
+  const items = matrixItems.length > 0 ? matrixItems : rows.slice(headerIndex + 1).map((row, rowOffset) => {
+    const item = createEmptyItem(rowOffset + headerIndex + 2);
     for (const [index, field] of headerMap) {
       if (
         field === 'sourcePackageQuantity'
@@ -135,9 +226,9 @@ export function rowsToQuotationDraft(rows: unknown[][]): ParsedQuotation {
   }).filter(item => item.sourceProductName || item.sourceProductCode);
 
   const taxText = metadata.get('税率') ?? '0';
-  const currency = (metadata.get('币种') ?? '').toUpperCase();
+  const currency = (metadata.get('币种') ?? priceContext.currency).toUpperCase();
   return {
-    supplierName: metadata.get('供应商') ?? metadata.get('供应商名称') ?? '',
+    supplierName: metadata.get('供应商') ?? metadata.get('供应商名称') ?? inferSupplierName(rows, headerIndex),
     quotationNumber: metadata.get('报价单号') ?? '',
     quotationDate: metadata.get('报价日期') ?? '',
     validUntil: metadata.get('有效期') ?? '',

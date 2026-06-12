@@ -36,4 +36,10 @@ assert.equal(
   '供应商报价单标签应暴露当前选中状态',
 );
 
+assert.equal(
+  source.includes('<ExcelQuotationPreview'),
+  true,
+  'Excel 报价原文件应使用应用内表格预览，而不是交给 iframe',
+);
+
 console.log('supplier quotation integrated navigation tests passed');

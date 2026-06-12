@@ -133,6 +133,97 @@ function Field({
   );
 }
 
+function ExcelQuotationPreview({ pathname }: { pathname: string }) {
+  const [sheets, setSheets] = useState<Array<{ name: string; rows: unknown[][] }>>([]);
+  const [activeSheet, setActiveSheet] = useState(0);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreviewError(null);
+    setSheets([]);
+    void fetch(`/api/quotation/file?pathname=${encodeURIComponent(pathname)}`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    })
+      .then(async response => {
+        if (!response.ok) throw new Error('无法读取报价原文件。');
+        const XLSX = await import('xlsx');
+        const workbook = XLSX.read(await response.arrayBuffer(), { type: 'array' });
+        return workbook.SheetNames.map(name => ({
+          name,
+          rows: XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[name], {
+            header: 1,
+            raw: false,
+            blankrows: false,
+          }).slice(0, 300),
+        }));
+      })
+      .then(nextSheets => {
+        if (!cancelled) {
+          setSheets(nextSheets);
+          setActiveSheet(0);
+        }
+      })
+      .catch(cause => {
+        if (!cancelled) setPreviewError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
+  if (previewError) {
+    return <div className="flex h-[610px] items-center justify-center p-6 text-center text-xs font-bold text-red-600">{previewError}</div>;
+  }
+  if (!sheets.length) {
+    return <div className="flex h-[610px] items-center justify-center text-xs font-bold text-slate-500">正在生成 Excel 预览...</div>;
+  }
+
+  const rows = sheets[activeSheet]?.rows ?? [];
+  const columnCount = Math.min(30, rows.reduce((maximum, row) => Math.max(maximum, row.length), 0));
+  return (
+    <div className="h-[610px] bg-white text-slate-900">
+      {sheets.length > 1 ? (
+        <div className="flex gap-1 overflow-x-auto border-b border-slate-200 bg-slate-100 p-2">
+          {sheets.map((sheet, index) => (
+            <button
+              key={sheet.name}
+              type="button"
+              onClick={() => setActiveSheet(index)}
+              className={`shrink-0 rounded px-3 py-1 text-[10px] font-black ${
+                activeSheet === index ? 'bg-blue-600 text-white' : 'bg-white text-slate-600'
+              }`}
+            >
+              {sheet.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div className="h-full overflow-auto pb-10">
+        <table className="min-w-full border-collapse text-[10px]">
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {Array.from({ length: columnCount }, (_, columnIndex) => (
+                  <td
+                    key={columnIndex}
+                    className={`max-w-52 whitespace-pre-wrap border border-slate-200 px-2 py-1.5 align-top ${
+                      rowIndex === 0 ? 'bg-slate-100 font-black' : ''
+                    }`}
+                  >
+                    {String(row[columnIndex] ?? '')}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function SupplierQuotationApp() {
   const [view, setView] = useState<View>('archive');
   const [workspace, setWorkspace] = useState(emptyWorkspace);
@@ -216,11 +307,21 @@ export default function SupplierQuotationApp() {
       if (extension === 'xlsx' || extension === 'xls') {
         const XLSX = await import('xlsx');
         const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false });
-        validation = validateParsedQuotation(rowsToQuotationDraft(rows));
+        validation = workbook.SheetNames
+          .map(sheetName => {
+            const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+              header: 1,
+              raw: false,
+              blankrows: false,
+            });
+            return validateParsedQuotation(rowsToQuotationDraft(rows));
+          })
+          .sort((left, right) => right.value.items.length - left.value.items.length)[0];
       } else {
         validation = await parseQuotationFile(blob.pathname, sourceFile.mimeType);
+      }
+      if (!validation || validation.value.items.length === 0) {
+        throw new Error('文件中没有可读取的产品文字和价格数据。请确认 Excel 单元格内包含产品名称与价格，而不是仅有图片或空白模板。');
       }
 
       const existingSupplier = workspace.suppliers.find(
@@ -576,11 +677,15 @@ function ReviewView({
               新窗口打开
             </a>
           </div>
-          <iframe
-            title="报价原文件"
-            src={`/api/quotation/file?pathname=${encodeURIComponent(quotation.sourceFile.pathname)}`}
-            className="h-[610px] w-full bg-white"
-          />
+          {quotation.sourceFile.mimeType.includes('spreadsheet') || quotation.sourceFile.mimeType === 'application/vnd.ms-excel' ? (
+            <ExcelQuotationPreview pathname={quotation.sourceFile.pathname} />
+          ) : (
+            <iframe
+              title="报价原文件"
+              src={`/api/quotation/file?pathname=${encodeURIComponent(quotation.sourceFile.pathname)}`}
+              className="h-[610px] w-full bg-white"
+            />
+          )}
         </section>
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="grid gap-3 md:grid-cols-3">

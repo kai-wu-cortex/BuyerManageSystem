@@ -37,6 +37,13 @@ export function isAllowedQuotationFile(pathname: string, contentType: string): b
   return pathname.startsWith('supplier-quotes/') && ALLOWED_CONTENT_TYPES.includes(contentType);
 }
 
+export function getQuotationFileDisposition(contentType: string, fileName: string): string {
+  const disposition = contentType === 'application/pdf' || contentType.startsWith('image/')
+    ? 'inline'
+    : 'attachment';
+  return `${disposition}; filename="${fileName.replace(/["\r\n]/g, '_')}"`;
+}
+
 export async function handleQuotationUploadRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -83,7 +90,8 @@ export async function handleQuotationFileRequest(req: ApiRequest, res: ApiRespon
   }
   const bytes = Buffer.from(await new Response(result.stream).arrayBuffer());
   res.setHeader('Content-Type', result.blob.contentType);
-  res.setHeader('Content-Disposition', result.blob.contentDisposition || 'inline');
+  const fileName = result.blob.pathname.split('/').pop() ?? 'quotation-file';
+  res.setHeader('Content-Disposition', getQuotationFileDisposition(result.blob.contentType, fileName));
   res.setHeader('Cache-Control', 'private, no-store');
   return res.status(200).send(bytes);
 }
