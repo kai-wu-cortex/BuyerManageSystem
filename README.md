@@ -26,6 +26,43 @@ CloudBase collections used by the app:
 - `ledger_backups`
 - `buyer_system_view_settings`
 
+## Supplier quotation mini-app
+
+The `供应商报价单` mini-app stores supplier quotation files, creates editable
+drafts from Excel/PDF/images, requires human review, and compares selected
+quotation versions after currency, tax, package, and unit normalization.
+
+Required server environment variables:
+
+- `MONGODB_URI` (or `MONGODB_DIRECT_URI`)
+- `SESSION_SECRET` (at least 32 random characters)
+- `GEMINI_API_KEY` for PDF/image parsing
+- `BLOB_READ_WRITE_TOKEN` for private Vercel Blob source files
+
+The following MongoDB collections are created on first use:
+
+- `supplier_profiles`
+- `supplier_quotations`
+- `supplier_quotation_items`
+- `supplier_quote_parse_jobs`
+- `supplier_product_groups`
+- `supplier_quote_audit_logs`
+
+Create the recommended indexes after configuring MongoDB:
+
+```bash
+npm run setup:quotation-indexes
+```
+
+Supported files are `.xlsx`, `.xls`, `.pdf`, `.png`, `.jpg`, `.jpeg`, and
+`.webp`, up to 25 MB. Source files remain private. AI output always enters the
+`待校对` workflow and cannot directly activate a quotation or confirm a product
+group.
+
+The Vercel CLI is not installed in this workspace. Install it with
+`npm i -g vercel` before using `vercel env pull`, `vercel deploy`, or
+`vercel logs`.
+
 Before running against CloudBase, create these collections in CloudBase 文档型数据库, enable anonymous login if this app should keep its no-login behavior, and apply rules equivalent to [cloudbase.rules.json](cloudbase.rules.json).
 
 ## Run Locally

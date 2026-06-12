@@ -9,6 +9,8 @@ import { handleLoginRequest } from "./src/server/loginApi";
 import { handleLogoutRequest } from "./src/server/logoutApi";
 import { handleQuotationFileRequest, handleQuotationUploadRequest } from "./src/server/quotationFileApi";
 import { handleQuotationParseRequest } from "./src/server/quotationParseApi";
+import { handleQuotationConfirmRequest } from "./src/server/quotationConfirmApi";
+import { handleSessionRequest } from "./src/server/sessionApi";
 import { getMongoDb } from "./src/lib/mongodb";
 
 dotenv.config({ path: ".env.local" });
@@ -83,6 +85,9 @@ app.post("/api/login", async (req, res) => {
 app.post("/api/logout", async (req, res) => {
   await handleLogoutRequest(req, res);
 });
+app.get("/api/session", async (req, res) => {
+  await handleSessionRequest(req, res);
+});
 app.post("/api/quotation/upload", async (req, res) => {
   await handleQuotationUploadRequest(req, res);
 });
@@ -91,6 +96,9 @@ app.get("/api/quotation/file", async (req, res) => {
 });
 app.post("/api/quotation/parse", async (req, res) => {
   await handleQuotationParseRequest(req, res);
+});
+app.post("/api/quotation/confirm", async (req, res) => {
+  await handleQuotationConfirmRequest(req, res);
 });
 
 async function startServer() {

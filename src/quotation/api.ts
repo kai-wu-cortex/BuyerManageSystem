@@ -36,6 +36,20 @@ export async function saveQuotationDraft(draft: QuotationDraft): Promise<void> {
   ]);
 }
 
+export async function confirmQuotationDraft(draft: QuotationDraft): Promise<QuotationDraft> {
+  const response = await fetch('/api/quotation/confirm', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(draft),
+  });
+  const payload = await response.json() as { success?: boolean; data?: QuotationDraft; message?: string };
+  if (!response.ok || !payload.success || !payload.data) {
+    throw new Error(payload.message ?? '报价确认失败。');
+  }
+  return payload.data;
+}
+
 export async function saveSupplierProfile(profile: SupplierProfile): Promise<void> {
   await setDocument(cloudbaseCollections.supplierProfiles, profile.id, profile);
 }

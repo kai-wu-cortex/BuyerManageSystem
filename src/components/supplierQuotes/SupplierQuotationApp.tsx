@@ -15,9 +15,10 @@ import {
   UploadCloud,
   Users,
 } from 'lucide-react';
-import { deriveQuotationDisplayStatus, normalizeTaxIncludedCnyPrice } from '../../quotation/normalization';
+import { deriveQuotationDisplayStatus } from '../../quotation/normalization';
 import { rowsToQuotationDraft, validateParsedQuotation, type ParsedQuotation } from '../../quotation/quotationParser';
 import {
+  confirmQuotationDraft,
   loadQuotationWorkspace,
   parseQuotationFile,
   saveProductGroup,
@@ -547,47 +548,18 @@ function ReviewView({
         throw new Error(`仍有 ${blockingIssues.length} 项字段问题和 ${missingGroups.length} 行未确认产品组。`);
       }
       const now = new Date().toISOString();
-      const normalizedItems = draftItems.map(item => {
-        const group = productGroups.find(candidate => candidate.id === item.productGroupId);
-        if (!activate || !group || item.sourceUnitPrice === null || item.sourcePackageQuantity === null) return item;
-        const price = normalizeTaxIncludedCnyPrice({
-          sourceUnitPrice: item.sourceUnitPrice,
-          currency: draftQuote.currency,
-          exchangeRateToCny: draftQuote.exchangeRateToCny,
-          priceTaxMode: draftQuote.priceTaxMode,
-          taxRate: draftQuote.taxRate,
-          sourcePackageQuantity: item.sourcePackageQuantity,
-          sourceUnit: item.sourceUnit,
-          normalizedUnit: group.baseUnit,
-        });
-        return {
-          ...item,
-          normalizedQuantity: 1,
-          normalizedUnit: group.baseUnit,
-          normalizedTaxIncludedCnyPrice: price,
-          normalizationDetails: {
-            currency: draftQuote.currency,
-            exchangeRateToCny: draftQuote.exchangeRateToCny,
-            priceTaxMode: draftQuote.priceTaxMode,
-            taxRate: draftQuote.taxRate,
-            sourceUnit: item.sourceUnit,
-            sourcePackageQuantity: item.sourcePackageQuantity,
-            normalizedUnit: group.baseUnit,
-            formula: '原始单价 × 固定汇率 × 税率系数 ÷ 包装数量',
-          },
-          updatedAt: now,
-        };
-      });
-      await saveQuotationDraft({
+      const nextDraft = {
         quotation: {
           ...draftQuote,
-          status: activate ? 'active' : 'review_required',
-          confirmedAt: activate ? now : draftQuote.confirmedAt,
-          confirmedBy: activate ? 'caigou' : draftQuote.confirmedBy,
           updatedAt: now,
         },
-        items: normalizedItems,
-      });
+        items: draftItems,
+      };
+      if (activate) {
+        await confirmQuotationDraft(nextDraft);
+      } else {
+        await saveQuotationDraft(nextDraft);
+      }
       setMessage(activate ? '报价单已确认生效。' : '校对草稿已保存。');
       await onSaved();
     } catch (cause) {

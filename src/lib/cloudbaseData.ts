@@ -298,7 +298,25 @@ export function validateCloudbaseLoginInput(username: string, password: string):
 }
 
 export async function getCurrentCloudbaseUser(): Promise<CloudbaseAuthUser | null> {
-  return readStoredAuthUser();
+  try {
+    const response = await fetch('/api/session', {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    });
+    if (!response.ok) {
+      clearStoredAuthUser();
+      return null;
+    }
+    const payload = await response.json() as { success?: boolean; data?: CloudbaseAuthUser };
+    if (!payload.success || !payload.data) {
+      clearStoredAuthUser();
+      return null;
+    }
+    writeStoredAuthUser(payload.data);
+    return payload.data;
+  } catch {
+    return readStoredAuthUser();
+  }
 }
 
 export async function signInToCloudbase(username: string, password: string): Promise<CloudbaseAuthUser> {

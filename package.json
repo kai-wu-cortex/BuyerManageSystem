@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx src/quotation/normalization.test.ts && tsx src/quotation/quotationParser.test.ts && tsx src/server/sessionAuth.test.ts && tsx src/lib/cloudbaseData.test.ts && tsx src/lib/geminiSampleParser.test.ts && tsx src/lib/mergeOrders.test.ts && tsx src/utils/ledgerView.test.ts && tsx src/utils/modulePreload.test.ts && tsx src/utils/bundleGuards.test.ts && tsx src/utils/dashboardMetrics.test.ts && tsx src/utils/ledgerImport.test.ts"
+    "setup:quotation-indexes": "tsx scripts/setup-quotation-indexes.ts",
+    "test": "tsx src/quotation/normalization.test.ts && tsx src/quotation/quotationParser.test.ts && tsx src/server/sessionAuth.test.ts && tsx src/server/quotationConfirmApi.test.ts && tsx src/server/quotationFileApi.test.ts && tsx src/server/quotationParseApi.test.ts && tsx src/lib/cloudbaseData.test.ts && tsx src/lib/geminiSampleParser.test.ts && tsx src/lib/mergeOrders.test.ts && tsx src/utils/ledgerView.test.ts && tsx src/utils/modulePreload.test.ts && tsx src/utils/bundleGuards.test.ts && tsx src/utils/dashboardMetrics.test.ts && tsx src/utils/ledgerImport.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
