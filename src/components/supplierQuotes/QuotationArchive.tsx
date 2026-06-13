@@ -2,7 +2,6 @@ import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Building2,
-  Eye,
   FileSpreadsheet,
   FileText,
   Image,
@@ -34,7 +33,6 @@ interface Props {
   workspace: QuotationWorkspace;
   loading: boolean;
   onRefresh: () => Promise<void>;
-  onSelectReview: (id: string) => void;
 }
 
 const MAX_SIZE = 25 * 1024 * 1024;
@@ -126,7 +124,7 @@ function makeDraft(
   return { draft: { quotation, items }, supplier };
 }
 
-export default function QuotationArchive({ workspace, loading, onRefresh, onSelectReview }: Props) {
+export default function QuotationArchive({ workspace, loading, onRefresh }: Props) {
   const [status, setStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showUpload, setShowUpload] = useState(false);
@@ -244,7 +242,6 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
       await Promise.all([saveSupplierProfile(supplier), saveQuotationDraft(draft)]);
       await onRefresh();
       setShowUpload(false);
-      onSelectReview(draft.quotation.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -309,12 +306,9 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
                     <td className="px-4 py-3 text-xs text-slate-600">V{quotation.version}</td>
                     <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusColor(displayStatus)}`}>{getStatusLabel(displayStatus)}</span></td>
                     <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <button type="button" onClick={() => onSelectReview(quotation.id)} className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></button>
-                        <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
-                          {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                        </button>
-                      </div>
+                      <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                        {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                      </button>
                     </td>
                   </tr>
                 );

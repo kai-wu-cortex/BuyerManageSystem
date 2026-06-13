@@ -1,14 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Archive,
   Building2,
 } from 'lucide-react';
 import QuotationArchive from './QuotationArchive';
-import QuotationReview from './QuotationReview';
 import SupplierProfiles from './SupplierProfiles';
 import { loadQuotationWorkspace, type QuotationWorkspace } from '../../quotation/api';
 
-type QuotationView = 'archive' | 'review' | 'profiles';
+type QuotationView = 'archive' | 'profiles';
 
 interface NavItem {
   id: QuotationView;
@@ -30,7 +29,6 @@ const NAV_ITEMS: NavItem[] = [
 export default function SupplierQuotationApp() {
   const [activeView, setActiveView] = useState<QuotationView>('archive');
   const [workspace, setWorkspace] = useState<QuotationWorkspace>(EMPTY_WORKSPACE);
-  const [selectedQuotationId, setSelectedQuotationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,23 +48,6 @@ export default function SupplierQuotationApp() {
     void refresh();
   }, [refresh]);
 
-  const selectedQuotation = useMemo(
-    () => workspace.quotations.find(quotation => quotation.id === selectedQuotationId) ?? null,
-    [selectedQuotationId, workspace.quotations],
-  );
-  const selectedItems = useMemo(
-    () => workspace.items.filter(item => item.quotationId === selectedQuotationId && !item.deletedAt),
-    [selectedQuotationId, workspace.items],
-  );
-  const selectedSupplier = selectedQuotation
-    ? workspace.suppliers.find(supplier => supplier.id === selectedQuotation.supplierId)
-    : undefined;
-
-  const openReview = (quotationId: string) => {
-    setSelectedQuotationId(quotationId);
-    setActiveView('review');
-  };
-
   const renderContent = () => {
     switch (activeView) {
       case 'archive':
@@ -75,18 +56,6 @@ export default function SupplierQuotationApp() {
             workspace={workspace}
             loading={loading}
             onRefresh={refresh}
-            onSelectReview={openReview}
-          />
-        );
-      case 'review':
-        return (
-          <QuotationReview
-            quotation={selectedQuotation}
-            items={selectedItems}
-            supplier={selectedSupplier}
-            productGroups={[]}
-            onSaved={refresh}
-            onBack={() => setActiveView('archive')}
           />
         );
       case 'profiles':
@@ -96,7 +65,7 @@ export default function SupplierQuotationApp() {
             quotations={workspace.quotations}
             items={workspace.items}
             onSaved={refresh}
-            onOpenQuotation={openReview}
+            onOpenQuotation={() => {}}
           />
         );
       default:
