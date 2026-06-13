@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Response } from 'express';
 import { getMongoCollection } from '../lib/mongodb.ts';
+import { createSessionToken, createSessionCookie } from './sessionAuth.ts';
 
 type ApiRequest = { method?: string; body?: unknown };
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
@@ -54,6 +55,14 @@ export async function handleLoginRequest(req: ApiRequest, res: ApiResponse): Pro
   if (!constantTimeEqual(computedHash, user.passwordHash)) {
     return res.status(401).json({ success: false, code: 'AUTH_FAILED', message: '用户名或密码错误。' });
   }
+
+  const secret = process.env.SESSION_SECRET || 'test-secret';
+  const token = createSessionToken(
+    { uid: user._id, username: user.username, role: user.role },
+    secret,
+  );
+
+  res.setHeader('Set-Cookie', createSessionCookie(token));
 
   return res.status(200).json({
     success: true,

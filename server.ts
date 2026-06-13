@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { parseSampleWithGemini } from "./src/lib/geminiSampleParser";
 import { handleMongoCollectionRequest, handleMongoDocumentRequest } from "./src/server/mongoDataApi";
 import { handleLoginRequest } from "./src/server/loginApi";
+import { handleLogoutRequest } from "./src/server/logoutApi";
 import { handleQuotationUploadToken, handleQuotationFileDownload } from "./src/server/quotationFileApi";
 import { getMongoDb } from "./src/lib/mongodb";
 
@@ -77,6 +78,11 @@ app.delete("/api/data/:collection/:id", async (req, res) => {
 // Login API (MongoDB-backed)
 app.post("/api/login", async (req, res) => {
   await handleLoginRequest(req, res);
+});
+
+// Logout API
+app.post("/api/logout", async (req, res) => {
+  await handleLogoutRequest(req, res);
 });
 
 // Quotation file upload and download

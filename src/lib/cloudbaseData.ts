@@ -335,6 +335,11 @@ export async function signInToCloudbase(username: string, password: string): Pro
 }
 
 export async function signOutFromCloudbase(): Promise<void> {
+  try {
+    await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch {
+    // ignore logout errors
+  }
   clearStoredAuthUser();
 }
 
