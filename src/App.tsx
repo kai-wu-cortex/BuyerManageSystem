@@ -255,6 +255,7 @@ export default function App() {
     samples: false,
     notes: false,
   });
+  const [cloudLedgerLoaded, setCloudLedgerLoaded] = useState(false);
   // ref：跟踪本地是否有未与云端同步的修改（写入云端期间也算 dirty）
   const localDirtyRef = useRef({
     inventory: false,
@@ -519,8 +520,10 @@ export default function App() {
             console.warn('Auto-load latest backup failed:', err);
           }
         }
+        setCloudLedgerLoaded(true);
       })
       .catch(error => {
+        setCloudLedgerLoaded(true);
         try {
           handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.ledgerBackups);
         } catch (handledError) {
@@ -1324,6 +1327,13 @@ export default function App() {
                 <SupplierSummaryApp purchaseOrders={purchaseOrders} />
               ) : activeTab === 'supplier-quotes' ? (
                 <SupplierQuotationApp />
+              ) : !cloudLedgerLoaded ? (
+                <div className="flex min-h-[55vh] items-center justify-center">
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+                    <p className="text-xs text-slate-500">正在从云端加载台账...</p>
+                  </div>
+                </div>
               ) : purchaseOrders.length === 0 ? (
                 <POList
                   purchaseOrders={purchaseOrders}
