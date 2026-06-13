@@ -71,6 +71,7 @@ export interface SupplierQuotation {
   version: number;
   confirmedBy: string | null;
   confirmedAt: string | null;
+  customColumns?: CustomColumn[];
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -100,6 +101,13 @@ export interface SupplierQuotationItem {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+}
+
+export interface CustomColumn {
+  id: string;
+  label: string;
+  sourceField: keyof SupplierQuotationItem | null;
+  values: Record<string, string | number | null>;
 }
 
 export interface SupplierProductGroup {

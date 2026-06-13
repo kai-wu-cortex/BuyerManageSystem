@@ -55,6 +55,13 @@ export type LedgerViewSettings = {
 
 export type BuyerSystemViewSettingsScope = 'dashboard' | 'ledger';
 
+export type BuyerSystemAccessMode = 'full' | 'ledgerUploadOnly' | 'none';
+
+export interface BuyerSystemAccess {
+  mode: BuyerSystemAccessMode;
+  label: string;
+}
+
 export interface BuyerSystemViewSettingsRecord {
   id: string;
   uid: string;
@@ -129,6 +136,101 @@ export function isCloudbaseConfigured(): boolean {
 export function normalizeCloudbaseDocumentId(id: string): string {
   const normalized = id.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
   return normalized || 'document';
+}
+
+const AUTH_STORAGE_KEY = 'buyer_system_auth_user';
+
+function readStoredAuthUser(): CloudbaseAuthUser | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CloudbaseAuthUser | null;
+    if (!parsed || typeof parsed.uid !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAuthUser(user: CloudbaseAuthUser): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+  } catch {}
+}
+
+function clearStoredAuthUser(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {}
+}
+
+export function normalizeCloudbaseUsername(username: string): string {
+  return username.trim();
+}
+
+export function getBuyerSystemAccess(user: CloudbaseAuthUser | null): BuyerSystemAccess {
+  const username = user?.username?.trim().toLowerCase() ?? '';
+  if (username === 'caigou') {
+    return { mode: 'full', label: '采购' };
+  }
+  if (username === 'caiwu') {
+    return { mode: 'ledgerUploadOnly', label: '财务' };
+  }
+  return { mode: 'none', label: '未授权' };
+}
+
+export function validateCloudbaseLoginInput(username: string, password: string): string | null {
+  if (!normalizeCloudbaseUsername(username)) return '请输入用户名。';
+  if (!password) return '请输入密码。';
+  return null;
+}
+
+export async function getCurrentCloudbaseUser(): Promise<CloudbaseAuthUser | null> {
+  return readStoredAuthUser();
+}
+
+export async function signInToCloudbase(username: string, password: string): Promise<CloudbaseAuthUser> {
+  const validationError = validateCloudbaseLoginInput(username, password);
+  if (validationError) throw new Error(validationError);
+
+  let response: Response;
+  try {
+    response = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: normalizeCloudbaseUsername(username), password }),
+    });
+  } catch {
+    throw new Error('无法连接登录服务，请检查网络。');
+  }
+
+  const payload = await response.json().catch(() => null) as
+    | { success?: boolean; message?: string; code?: string; data?: { uid: string; username: string; role?: 'caigou' | 'caiwu' | null } }
+    | null;
+
+  if (!response.ok || !payload?.success || !payload.data) {
+    throw new Error(payload?.message ?? '登录失败，请稍后重试。');
+  }
+
+  const user: CloudbaseAuthUser = {
+    uid: payload.data.uid,
+    username: payload.data.username,
+    email: null,
+    role: payload.data.role ?? null,
+  };
+
+  writeStoredAuthUser(user);
+  return user;
+}
+
+export async function signOutFromCloudbase(): Promise<void> {
+  try {
+    await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch {}
+  clearStoredAuthUser();
 }
 
 export function cleanUndefined<T>(value: T): T {

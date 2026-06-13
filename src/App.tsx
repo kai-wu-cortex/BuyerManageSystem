@@ -3,6 +3,7 @@ import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POSt
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { parseClipboardLine } from './utils/ledgerHelper';
 import { analyzeLedgerHeaders, rowsToLedgerLines } from './utils/ledgerImport';
+import SystemLogin from './components/SystemLogin';
 import {
   Dashboard,
   NoteboardCanvas,
@@ -20,6 +21,7 @@ import {
   clearCloudbaseCollections,
   cloudbaseCollections,
   formatLedgerBackupSize,
+  getBuyerSystemAccess,
   getDocument,
   getLatestLedgerBackup,
   handleCloudbaseError,
@@ -32,6 +34,9 @@ import {
   replaceCollection,
   replaceRecordCollection,
   saveLedgerBackup,
+  signInToCloudbase,
+  signOutFromCloudbase,
+  getCurrentCloudbaseUser,
   type CloudbaseAuthUser,
   type LedgerBackup,
 } from './lib/cloudbaseData';
@@ -53,7 +58,10 @@ import {
   FileJson,
   FileSpreadsheet,
   Loader2,
+  LogOut,
 } from 'lucide-react';
+
+type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
 const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: '采购物料大屏', icon: <BarChart3 className="w-5 h-5 shrink-0" /> },
@@ -76,13 +84,6 @@ const MODULE_FALLBACK_LABELS: Record<AppTab, string> = {
   noteboard: '便签画板',
   'supplier-summary': '供应商汇总',
   'supplier-quotes': '供应商报价',
-};
-
-const WORKSPACE_USER: CloudbaseAuthUser = {
-  uid: 'quotation-workspace',
-  username: '采购工作区',
-  email: null,
-  role: 'caigou',
 };
 
 function ModuleLoadingFallback({ label }: { label: string }) {
@@ -241,7 +242,11 @@ export function mergeSampleRecordsById(
 }
 
 export default function App() {
-  const authUser = WORKSPACE_USER;
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
+  const [authUser, setAuthUser] = useState<CloudbaseAuthUser | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const userAccess = getBuyerSystemAccess(authUser);
   const { starredIds } = useStarredPOs(authUser);
 
   // ref：跟踪云端初始数据是否已加载完，避免「用户改了 → 云端拉回又覆盖回去」
@@ -332,8 +337,61 @@ export default function App() {
     writeStoredLedgerBackupTime(rawTime);
   };
 
+  const handleSignIn = async (username: string, password: string) => {
+    setIsSigningIn(true);
+    setAuthError(null);
+    try {
+      const user = await signInToCloudbase(username, password);
+      setAuthUser(user);
+      setAuthStatus('authenticated');
+    } catch (error) {
+      setAuthUser(null);
+      setAuthStatus('unauthenticated');
+      setAuthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOutFromCloudbase();
+    } catch (error) {
+      console.error('Sign out failed:', error);
+    } finally {
+      setAuthUser(null);
+      setAuthStatus('unauthenticated');
+      setPurchaseOrders([]);
+      setInventory([]);
+      setSamples([]);
+      setNotes({});
+    }
+  };
+
+  // Auth check on mount
+  useEffect(() => {
+    let isMounted = true;
+    void getCurrentCloudbaseUser()
+      .then(user => {
+        if (!isMounted) return;
+        setAuthUser(user);
+        setAuthStatus(user ? 'authenticated' : 'unauthenticated');
+      })
+      .catch(error => {
+        if (!isMounted) return;
+        setAuthUser(null);
+        setAuthStatus('unauthenticated');
+        setAuthError(error instanceof Error ? error.message : String(error));
+      });
+    return () => { isMounted = false; };
+  }, []);
+
   // Initial load & real-time CloudBase sync
   useEffect(() => {
+    if (authStatus !== 'authenticated' || userAccess.mode !== 'full') {
+      return undefined;
+    }
+
     // 1. Sync Purchase Orders from localStorage
     const savedPO = localStorage.getItem("purchase_orders");
     if (savedPO) {
@@ -452,7 +510,7 @@ export default function App() {
     return () => {
       clearInterval(clockInterval);
     };
-  }, []);
+  }, [authStatus, userAccess.mode]);
 
   // Sync state values on changes directly to CloudBase
   const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
@@ -937,6 +995,28 @@ export default function App() {
   const applyingSamplesCount = samples.filter(s => s.status === '申请中').length;
   const hasLedgerUpdate = isLedgerBackupNewerThanLoaded(latestRemoteLedgerBackup, loadedLedgerBackupRawTime);
 
+  if (authStatus === 'checking') {
+    return (
+      <div className="min-h-screen bg-[#0F172A] text-white flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-300" />
+          <p className="text-xs font-bold tracking-[0.2em] uppercase text-slate-400">正在验证登录状态...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authStatus === 'unauthenticated') {
+    return (
+      <SystemLogin
+        isConfigured={isCloudbaseConfigured()}
+        isSigningIn={isSigningIn}
+        error={authError}
+        onSignIn={handleSignIn}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F1F5F9] flex flex-col font-sans text-slate-900 selection:bg-blue-100">
       
@@ -1109,9 +1189,16 @@ export default function App() {
               <div className="flex flex-col items-end leading-none gap-0.5">
                 <span className="text-[9px] uppercase font-semibold text-slate-400 font-mono">Workspace</span>
                 <span className="max-w-32 truncate font-mono text-[11px] font-bold text-slate-700">
-                  {authUser.username}
+                  {authUser?.username ?? authUser?.uid}
                 </span>
               </div>
+              <button
+                onClick={() => void handleSignOut()}
+                className="h-7 w-7 rounded border border-slate-200 bg-white text-slate-400 hover:text-red-500 hover:border-red-200 flex items-center justify-center transition"
+                title="退出登入"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
               <div className="h-6 w-px bg-slate-200"></div>
               <div className="flex flex-col items-end gap-1">
                 <div className="flex items-center gap-1.5">
@@ -1186,6 +1273,29 @@ export default function App() {
 
           {/* Central content container */}
           <main ref={mainScrollRef} className="flex-1 p-3 md:p-4 overflow-y-auto bg-[#F8FAFC]">
+            {userAccess.mode === 'ledgerUploadOnly' ? (
+              <div className="flex flex-col items-center justify-center gap-4 p-10 text-center">
+                <UploadCloud className="h-12 w-12 text-blue-400" />
+                <div>
+                  <p className="text-sm font-bold text-slate-800">财务台账上传</p>
+                  <p className="mt-2 text-xs text-slate-500">当前账号为财务权限，仅支持上传台账文件。</p>
+                </div>
+                <input
+                  type="file"
+                  accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="hidden"
+                  ref={fileInputRef}
+                  onClick={event => { event.currentTarget.value = ''; }}
+                  onChange={handleFileUpload}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="rounded-lg bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-blue-700"
+                >
+                  选择文件上传
+                </button>
+              </div>
+            ) : (
             <Suspense fallback={<ModuleLoadingFallback label={MODULE_FALLBACK_LABELS[activeTab]} />}>
               {activeTab === 'noteboard' ? (
                 <NoteboardCanvas authUser={authUser} />
@@ -1277,6 +1387,7 @@ export default function App() {
                 </>
               )}
             </Suspense>
+            )}
           </main>
 
 

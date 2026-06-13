@@ -25,8 +25,9 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
   }
   const pathname = typeof req.body?.pathname === 'string' ? req.body.pathname : '';
   const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType : '';
-  if (!pathname.startsWith('supplier-quotes/') || (!mimeType.startsWith('image/') && mimeType !== 'application/pdf')) {
-    return sendError(res, 400, 'INVALID_FILE', '仅支持已上传的 PDF 或图片报价单。');
+  const isExcel = mimeType.includes('spreadsheet') || mimeType.includes('ms-excel');
+  if (!pathname.startsWith('supplier-quotes/') || (!mimeType.startsWith('image/') && mimeType !== 'application/pdf' && !isExcel)) {
+    return sendError(res, 400, 'INVALID_FILE', '仅支持已上传的 PDF、图片或 Excel 报价单。');
   }
   if (!process.env.GEMINI_API_KEY) {
     return sendError(res, 503, 'GEMINI_NOT_CONFIGURED', 'Gemini API Key 尚未配置。');
@@ -39,13 +40,15 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
     }
     const base64 = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString('base64');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const promptText = isExcel
+      ? `解析这份供应商报价单（Excel文件）。逐行读取每个sheet的产品、价格和报价信息。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`
+      : `解析这份供应商报价单。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`;
     const response = await ai.models.generateContent({
       model: 'gemini-3.5-flash',
       contents: {
         parts: [
           {
-            text: `解析这份供应商报价单。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。
-返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`,
+            text: promptText,
           },
           { inlineData: { mimeType, data: base64 } },
         ],

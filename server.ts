@@ -5,6 +5,8 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { parseSampleWithGemini } from "./src/lib/geminiSampleParser";
 import { handleMongoCollectionRequest, handleMongoDocumentRequest } from "./src/server/mongoDataApi";
+import { handleLoginRequest } from "./src/server/loginApi";
+import { handleLogoutRequest } from "./src/server/logoutApi";
 import { handleQuotationFileRequest, handleQuotationUploadRequest } from "./src/server/quotationFileApi";
 import { handleQuotationParseRequest } from "./src/server/quotationParseApi";
 import { handleQuotationConfirmRequest } from "./src/server/quotationConfirmApi";
@@ -76,6 +78,16 @@ if (!shouldProxyDataApi) {
   });
   app.delete("/api/data/:collection/:id", async (req, res) => {
     await handleMongoDocumentRequest(req, res);
+  });
+
+  // Login API (MongoDB-backed)
+  app.post("/api/login", async (req, res) => {
+    await handleLoginRequest(req, res);
+  });
+
+  // Logout API
+  app.post("/api/logout", async (req, res) => {
+    await handleLogoutRequest(req, res);
   });
 
   // Quotation file upload and download

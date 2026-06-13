@@ -131,6 +131,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [parseMode, setParseMode] = useState<'internal' | 'gemini'>('internal');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const supplierMap = useMemo(
@@ -187,19 +188,27 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
       setUploadProgress('正在解析产品、价格和报价信息...');
       let validation;
       if (extension === 'xlsx' || extension === 'xls') {
-        const XLSX = await import('xlsx');
-        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-        validation = workbook.SheetNames
-          .map(sheetName => validateParsedQuotation(rowsToQuotationDraft(
-            XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
-              header: 1,
-              raw: false,
-              blankrows: false,
-            }),
-          )))
-          .sort((left, right) => right.value.items.length - left.value.items.length)[0];
+        if (parseMode === 'gemini') {
+          validation = await parseQuotationFile(blob.pathname, file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        } else {
+          const XLSX = await import('xlsx');
+          const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+          validation = workbook.SheetNames
+            .map(sheetName => validateParsedQuotation(rowsToQuotationDraft(
+              XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+                header: 1,
+                raw: false,
+                blankrows: false,
+              }),
+            )))
+            .sort((left, right) => right.value.items.length - left.value.items.length)[0];
+        }
       } else {
-        validation = await parseQuotationFile(blob.pathname, sourceFile.mimeType);
+        if (parseMode === 'internal') {
+          validation = await parseQuotationFile(blob.pathname, sourceFile.mimeType);
+        } else {
+          validation = await parseQuotationFile(blob.pathname, sourceFile.mimeType);
+        }
       }
       if (!validation || validation.value.items.length === 0) {
         throw new Error('文件中没有读取到产品和价格数据。');
@@ -297,6 +306,17 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
           <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4"><div><h3 className="text-lg font-bold text-slate-800">上传报价单</h3><p className="mt-1 text-xs text-slate-500">支持 Excel、PDF 和图片，最大 25MB</p></div><button type="button" disabled={uploading} onClick={() => setShowUpload(false)}><X className="h-5 w-5 text-slate-400" /></button></div>
             <div className="p-6">
+              <div className="mb-4 flex items-center gap-6">
+                <span className="text-xs font-semibold text-slate-500">解析模式:</span>
+                <label className="flex items-center gap-1.5 text-xs text-slate-700">
+                  <input type="radio" name="parseMode" value="internal" checked={parseMode === 'internal'} onChange={() => setParseMode('internal')} disabled={uploading} className="accent-blue-600" />
+                  内部算法解析
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-slate-700">
+                  <input type="radio" name="parseMode" value="gemini" checked={parseMode === 'gemini'} onChange={() => setParseMode('gemini')} disabled={uploading} className="accent-blue-600" />
+                  Gemini AI 解析
+                </label>
+              </div>
               <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.pdf,.png,.jpg,.jpeg,.webp" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) void handleFileUpload(file); }} />
               {uploading ? <div className="py-10 text-center"><Loader2 className="mx-auto mb-4 h-10 w-10 animate-spin text-blue-500" /><p className="text-sm font-medium text-slate-700">{uploadProgress}</p></div> : <button type="button" onClick={() => fileInputRef.current?.click()} className="w-full rounded-xl border-2 border-dashed border-slate-200 p-10 text-center hover:border-blue-400 hover:bg-slate-50"><Upload className="mx-auto mb-4 h-10 w-10 text-slate-400" /><p className="text-sm font-medium text-slate-700">点击选择报价文件</p><p className="mt-2 text-xs text-slate-400">.xlsx / .xls / .pdf / .png / .jpg / .webp</p></button>}
             </div>
