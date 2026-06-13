@@ -61,8 +61,38 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     let contents: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
 
-    const baseInstruction = `只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`;
-    const extraPrompt = customPrompt ? `\n\n额外要求：${customPrompt}` : '';
+    const baseInstruction = `你是一个专业的报价单解析引擎。请严格按照以下规则解析报价单：
+
+## 解析规则
+
+### 1. 表头信息提取
+- 供应商名称、报价单号、报价日期、有效期、币种、汇率、税率、含税模式、付款方式、交期
+- 如果某些字段未明确标注，留空即可，不要猜测
+
+### 2. 产品行解析（核心规则）
+- **产品名称与型号分离**：如果产品名称和型号写在同一单元格（如"XX产品-A001"），请拆分为：产品名称="XX产品"，产品编码="A001"
+- **产品系列展开**：如果产品编号用范围表示（如"A-001~A-005"或"Model X-1 到 X-10"），请展开为每一项单独的行，每行赋予正确的价格。如果范围内价格不同，按实际价格填写；如果价格相同，每行都填相同价格
+- **多规格/多厚度展开**：同一产品有不同规格（如厚度0.5mm/1.0mm/2.0mm），每个规格视为独立产品行，分别填写各自的规格和价格
+- **矩阵式价格表**：如果表格是矩阵格式（行是产品，列是不同规格/数量的价格），请将每个价格单元格展开为独立的产品行，在sourceSpecification中注明对应的规格/数量条件
+- **合并单元格处理**：如果一个产品名称跨越多行，下方的每行都是该产品的不同规格/变体，为每行创建独立的产品记录
+
+### 3. 字段映射
+- sourceProductCode: 产品编码/料号/编号/型号
+- sourceProductName: 产品名称（不含型号部分）
+- sourceSpecification: 规格/型号/厚度/尺寸等详细参数
+- sourceUnit: 计量单位
+- sourcePackageDescription: 包装说明/包装方式
+- sourcePackageQuantity: 包装数量/每箱数量/装箱数
+- sourceUnitPrice: 单价/含税单价
+- minimumOrderQuantity: 最小起订量/MOQ
+- lineLeadTimeDays: 交期/货期
+
+### 4. 数据准确性
+- 只提取文件中明确存在的信息，不要猜测
+- 价格必须与对应产品行匹配，不要张冠李戴
+- 如果一个产品有多个价格条件（如不同数量段），每个条件单独一行
+- 数字字段（价格、数量、交期）只填数字，不填单位`;
+const extraPrompt = customPrompt ? `\n\n用户额外要求：${customPrompt}` : '';
 
     if (isExcel) {
       const arrayBuffer = await new Response(blob.stream).arrayBuffer();
@@ -70,7 +100,7 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
       contents = {
         parts: [
           {
-            text: `以下是Excel报价单的内容（Tab分隔，每行为一行）：\n\n${textData}\n\n解析这份供应商报价单。逐行读取每个sheet的产品、价格和报价信息。${baseInstruction}${extraPrompt}`,
+            text: `以下是Excel报价单的原始数据（Tab分隔，每行为一行，第一行通常是表头）：\n\n${textData}\n\n${baseInstruction}${extraPrompt}`,
           },
         ],
       };
@@ -79,7 +109,7 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
       contents = {
         parts: [
           {
-            text: `解析这份供应商报价单。${baseInstruction}${extraPrompt}`,
+            text: `${baseInstruction}${extraPrompt}`,
           },
           { inlineData: { mimeType, data: base64 } },
         ],
