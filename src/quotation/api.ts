@@ -72,12 +72,12 @@ export async function deleteQuotation(quotationId: string, items: SupplierQuotat
   );
 }
 
-export async function parseQuotationFile(pathname: string, mimeType: string): Promise<ParsedQuotationValidation> {
+export async function parseQuotationFile(pathname: string, mimeType: string, customPrompt?: string): Promise<ParsedQuotationValidation> {
   const response = await fetch('/api/quotation/parse', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pathname, mimeType }),
+    body: JSON.stringify({ pathname, mimeType, customPrompt }),
   });
   const payload = await response.json() as {
     success?: boolean;

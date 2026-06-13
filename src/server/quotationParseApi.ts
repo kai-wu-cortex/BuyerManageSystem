@@ -6,7 +6,7 @@ import { validateParsedQuotation } from '../quotation/quotationParser.ts';
 
 type ApiRequest = IncomingMessage & {
   method?: string;
-  body?: { pathname?: unknown; mimeType?: unknown };
+  body?: { pathname?: unknown; mimeType?: unknown; customPrompt?: unknown };
 };
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
 
@@ -43,6 +43,7 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
   }
   const pathname = typeof req.body?.pathname === 'string' ? req.body.pathname : '';
   const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType : '';
+  const customPrompt = typeof req.body?.customPrompt === 'string' ? req.body.customPrompt.trim() : '';
   const isExcel = mimeType.includes('spreadsheet') || mimeType.includes('ms-excel');
   if (!pathname.startsWith('supplier-quotes/') || (!mimeType.startsWith('image/') && mimeType !== 'application/pdf' && !isExcel)) {
     return sendError(res, 400, 'INVALID_FILE', '仅支持已上传的 PDF、图片或 Excel 报价单。');
@@ -60,13 +61,16 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     let contents: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
 
+    const baseInstruction = `只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`;
+    const extraPrompt = customPrompt ? `\n\n额外要求：${customPrompt}` : '';
+
     if (isExcel) {
       const arrayBuffer = await new Response(blob.stream).arrayBuffer();
       const textData = await excelToTextForGemini(arrayBuffer);
       contents = {
         parts: [
           {
-            text: `以下是Excel报价单的内容（Tab分隔，每行为一行）：\n\n${textData}\n\n解析这份供应商报价单。逐行读取每个sheet的产品、价格和报价信息。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`,
+            text: `以下是Excel报价单的内容（Tab分隔，每行为一行）：\n\n${textData}\n\n解析这份供应商报价单。逐行读取每个sheet的产品、价格和报价信息。${baseInstruction}${extraPrompt}`,
           },
         ],
       };
@@ -75,7 +79,7 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
       contents = {
         parts: [
           {
-            text: `解析这份供应商报价单。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`,
+            text: `解析这份供应商报价单。${baseInstruction}${extraPrompt}`,
           },
           { inlineData: { mimeType, data: base64 } },
         ],
