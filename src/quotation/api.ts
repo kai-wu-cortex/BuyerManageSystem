@@ -4,6 +4,8 @@ import {
   listDocuments,
   setDocument,
 } from '../lib/cloudbaseData';
+
+export { cloudbaseCollections, setDocument };
 import type {
   QuotationDraft,
   SupplierProfile,

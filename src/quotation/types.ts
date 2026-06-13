@@ -70,6 +70,7 @@ export interface SupplierQuotation {
   version: number;
   confirmedBy: string | null;
   confirmedAt: string | null;
+  summary?: string;
   customColumns?: CustomColumn[];
   createdAt: string;
   updatedAt: string;
