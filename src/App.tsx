@@ -498,8 +498,27 @@ export default function App() {
       });
 
     void listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups, { sizeFields: ['orders'] })
-      .then(records => {
-        setLatestRemoteLedgerBackup(getLatestLedgerBackup(records));
+      .then(async records => {
+        const latest = getLatestLedgerBackup(records);
+        setLatestRemoteLedgerBackup(latest);
+        // Auto-load latest backup if local storage is empty
+        if (latest && purchaseOrdersRef.current.length === 0) {
+          try {
+            let backupToLoad = latest;
+            if (!Array.isArray(backupToLoad.orders) && backupToLoad.chunkCount) {
+              const full = await getDocument<LedgerBackup>(cloudbaseCollections.ledgerBackups, latest.id);
+              if (full) backupToLoad = full;
+            }
+            const parsedOrders = await loadLedgerBackupOrders(backupToLoad);
+            if (Array.isArray(parsedOrders) && parsedOrders.length > 0) {
+              const { merged } = mergePurchaseOrdersById([], parsedOrders);
+              handleUpdateOrders(merged);
+              markLedgerBackupLoaded(backupToLoad.rawTime);
+            }
+          } catch (err) {
+            console.warn('Auto-load latest backup failed:', err);
+          }
+        }
       })
       .catch(error => {
         try {
