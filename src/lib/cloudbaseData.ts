@@ -105,7 +105,6 @@ export type CollectionName =
   | 'supplier_quotations'
   | 'supplier_quotation_items'
   | 'supplier_quote_parse_jobs'
-  | 'supplier_product_groups'
   | 'supplier_quote_audit_logs';
 
 const MAX_SYNC_DOCUMENT_BYTES = 900000;
@@ -617,6 +616,5 @@ export const cloudbaseCollections = {
   supplierQuotations: 'supplier_quotations',
   supplierQuotationItems: 'supplier_quotation_items',
   supplierQuoteParseJobs: 'supplier_quote_parse_jobs',
-  supplierProductGroups: 'supplier_product_groups',
   supplierQuoteAuditLogs: 'supplier_quote_audit_logs',
 } as const satisfies Record<string, CollectionName>;

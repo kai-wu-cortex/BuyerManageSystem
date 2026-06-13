@@ -17,7 +17,6 @@ import { confirmQuotationDraft, parseQuotationFile, saveQuotationDraft } from '.
 import { validateParsedQuotation } from '../../quotation/quotationParser';
 import type {
   CustomColumn,
-  SupplierProductGroup,
   SupplierProfile,
   SupplierQuotation,
   SupplierQuotationItem,
@@ -27,7 +26,7 @@ interface Props {
   quotation: SupplierQuotation | null;
   items: SupplierQuotationItem[];
   supplier?: SupplierProfile;
-  productGroups: SupplierProductGroup[];
+  productGroups?: never[];
   onSaved: () => Promise<void>;
   onBack: () => void;
 }
@@ -115,7 +114,7 @@ function ExcelPreview({ pathname }: { pathname: string }) {
   );
 }
 
-export default function QuotationReview({ quotation, items, supplier, productGroups, onSaved, onBack }: Props) {
+export default function QuotationReview({ quotation, items, supplier, onSaved, onBack }: Props) {
   const [draftQuotation, setDraftQuotation] = useState<SupplierQuotation | null>(quotation);
   const [draftItems, setDraftItems] = useState<SupplierQuotationItem[]>(items);
   const [customColumns, setCustomColumns] = useState<CustomColumn[]>(quotation?.customColumns ?? []);
@@ -162,8 +161,7 @@ export default function QuotationReview({ quotation, items, supplier, productGro
     leadTimeDays: draftQuotation.leadTimeDays,
     items: draftItems,
   });
-  const missingGroups = draftItems.filter(item => !item.productGroupId || item.groupMatchStatus !== 'confirmed');
-  const blockingCount = validation.issues.length + missingGroups.length;
+  const blockingCount = validation.issues.length;
   const confidence = Math.max(0, Math.round(100 - blockingCount * 8));
 
   const activeFields = useMemo(() => detectActiveFields(draftItems), [draftItems]);
@@ -416,7 +414,6 @@ export default function QuotationReview({ quotation, items, supplier, productGro
               <th className="px-2 py-2"><input type="checkbox" checked={allSelected} onChange={e => setSelectedIds(e.target.checked ? new Set(draftItems.map(i => i.id)) : new Set())} className="accent-blue-600" /></th>
               <th className="px-2 py-2 text-left font-semibold text-slate-500">#</th>
               {mappableFields.map(f => <th key={f.field} className="px-1 py-2 text-left font-semibold text-slate-500">{f.label}</th>)}
-              <th className="px-1 py-2 text-left font-semibold text-slate-500">产品组</th>
               {customColumns.map(c => <th key={c.id} className="px-1 py-2 text-left font-semibold text-slate-500">{c.label}</th>)}
               <th className="px-1 py-2"></th>
             </tr></thead>
@@ -440,7 +437,6 @@ export default function QuotationReview({ quotation, items, supplier, productGro
                   </td>
                 );
               })}
-              <td className="px-1 py-2"><select value={item.productGroupId ?? ''} onChange={event => updateItem(index, { productGroupId: event.target.value || null, groupMatchStatus: event.target.value ? 'confirmed' : 'unmatched' })} className="w-36 rounded border border-slate-200 px-2 py-1.5"><option value="">待分组</option>{productGroups.filter(group => group.status === 'confirmed').map(group => <option key={group.id} value={group.id}>{group.standardName}</option>)}</select></td>
               {customColumns.map(col => {
                 const val = getCustomCellValue(col, item.id);
                 return <td key={col.id} className="px-1 py-2"><input value={val ?? ''} onChange={e => updateCustomColumnValue(col.id, item.id, e.target.value)} className="w-24 rounded border border-slate-200 px-2 py-1.5" /></td>;
@@ -469,7 +465,6 @@ export default function QuotationReview({ quotation, items, supplier, productGro
               <div className="max-h-32 overflow-auto border-t border-red-100 bg-red-50 px-6 py-3">
                 <ul className="list-disc space-y-1 pl-5 text-xs text-red-600">
                   {validation.issues.map((issue, i) => <li key={i}>{issue.message}</li>)}
-                  {missingGroups.map((item, i) => <li key={`g-${i}`}>第 {item.lineNumber} 行未分配产品组</li>)}
                 </ul>
               </div>
             )}

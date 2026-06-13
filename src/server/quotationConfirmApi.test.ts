@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { prepareConfirmedQuotation } from './quotationConfirmApi';
-import type { QuotationDraft, SupplierProductGroup } from '../quotation/types';
+import type { QuotationDraft } from '../quotation/types';
 
 const now = '2026-06-12T00:00:00.000Z';
 const draft: QuotationDraft = {
@@ -46,8 +46,8 @@ const draft: QuotationDraft = {
     sourceUnitPrice: 100,
     minimumOrderQuantity: 10,
     lineLeadTimeDays: 7,
-    productGroupId: 'group-1',
-    groupMatchStatus: 'confirmed',
+    productGroupId: null,
+    groupMatchStatus: 'unmatched',
     normalizedQuantity: null,
     normalizedUnit: null,
     normalizedTaxIncludedCnyPrice: 0.01,
@@ -60,37 +60,9 @@ const draft: QuotationDraft = {
   }],
 };
 
-const groups: SupplierProductGroup[] = [{
-  id: 'group-1',
-  standardName: '纸箱',
-  standardSpecification: '标准',
-  baseUnit: '个',
-  conversionRules: {},
-  aliases: [],
-  status: 'confirmed',
-  confirmedBy: 'caigou',
-  confirmedAt: now,
-  createdAt: now,
-  updatedAt: now,
-  deletedAt: null,
-}];
-
-const confirmed = prepareConfirmedQuotation(draft, groups, 'caigou', now);
+const confirmed = prepareConfirmedQuotation(draft, 'caigou', now);
 assert.equal(confirmed.quotation.status, 'active');
 assert.equal(confirmed.items[0].normalizedTaxIncludedCnyPrice, 81.36);
-assert.equal(confirmed.items[0].normalizedUnit, '个');
-
-assert.throws(
-  () => prepareConfirmedQuotation(draft, [{ ...groups[0], status: 'suggested' }], 'caigou', now),
-  /尚未确认/,
-);
-
-assert.throws(
-  () => prepareConfirmedQuotation({
-    ...draft,
-    items: [{ ...draft.items[0], sourceUnit: 'kg' }],
-  }, groups, 'caigou', now),
-  /不同量纲/,
-);
+assert.equal(confirmed.items[0].normalizedUnit, '箱');
 
 console.log('quotation confirmation tests passed');

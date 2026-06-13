@@ -20,7 +20,6 @@ const EMPTY_WORKSPACE: QuotationWorkspace = {
   quotations: [],
   items: [],
   suppliers: [],
-  productGroups: [],
 };
 
 const NAV_ITEMS: NavItem[] = [
@@ -85,7 +84,7 @@ export default function SupplierQuotationApp() {
             quotation={selectedQuotation}
             items={selectedItems}
             supplier={selectedSupplier}
-            productGroups={workspace.productGroups}
+            productGroups={[]}
             onSaved={refresh}
             onBack={() => setActiveView('archive')}
           />

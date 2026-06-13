@@ -3,7 +3,6 @@ export type QuotationDisplayStatus = QuotationWorkflowStatus | 'expired';
 export type ParseJobStatus = 'queued' | 'processing' | 'review_required' | 'failed' | 'completed';
 export type PriceTaxMode = 'tax_included' | 'tax_excluded';
 export type GroupMatchStatus = 'unmatched' | 'suggested' | 'confirmed';
-export type ProductGroupStatus = 'suggested' | 'confirmed';
 
 export interface SourceFileRef {
   id: string;
@@ -110,21 +109,6 @@ export interface CustomColumn {
   values: Record<string, string | number | null>;
 }
 
-export interface SupplierProductGroup {
-  id: string;
-  standardName: string;
-  standardSpecification: string;
-  baseUnit: string;
-  conversionRules: Record<string, number>;
-  aliases: string[];
-  status: ProductGroupStatus;
-  confirmedBy: string | null;
-  confirmedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  deletedAt: string | null;
-}
-
 export interface SupplierQuoteParseJob {
   id: string;
   quotationId: string;
@@ -146,17 +130,6 @@ export interface SupplierQuoteParseJob {
 export interface QuotationDraft {
   quotation: SupplierQuotation;
   items: SupplierQuotationItem[];
-}
-
-export interface ComparisonColumn {
-  quotation: SupplierQuotation;
-  item: SupplierQuotationItem;
-  supplier: SupplierProfile;
-}
-
-export interface ComparisonResult {
-  productGroup: SupplierProductGroup;
-  columns: ComparisonColumn[];
 }
 
 export interface NormalizePriceInput {

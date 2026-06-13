@@ -2,10 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Response } from 'express';
 import { getMongoClient, getMongoDb } from '../lib/mongodb.ts';
 import { normalizeTaxIncludedCnyPrice } from '../quotation/normalization.ts';
-import type {
-  QuotationDraft,
-  SupplierProductGroup,
-} from '../quotation/types.ts';
+import type { QuotationDraft } from '../quotation/types.ts';
 
 const QUOTATION_WORKSPACE_ACTOR = 'quotation-workspace';
 
@@ -15,7 +12,6 @@ type StringIdDocument<T> = T & { _id: string };
 
 export function prepareConfirmedQuotation(
   draft: QuotationDraft,
-  productGroups: SupplierProductGroup[],
   actor: string,
   confirmedAt = new Date().toISOString(),
 ): QuotationDraft {
@@ -27,15 +23,7 @@ export function prepareConfirmedQuotation(
   }
   if (!draft.items.length) throw new Error('报价单没有产品明细。');
 
-  const groupMap = new Map(productGroups.map(group => [group.id, group]));
   const items = draft.items.map(item => {
-    if (!item.productGroupId || item.groupMatchStatus !== 'confirmed') {
-      throw new Error(`第 ${item.lineNumber} 行产品组尚未确认。`);
-    }
-    const group = groupMap.get(item.productGroupId);
-    if (!group || group.status !== 'confirmed' || group.deletedAt) {
-      throw new Error(`第 ${item.lineNumber} 行产品组尚未确认。`);
-    }
     if (!item.sourceProductName || !item.sourceUnit) {
       throw new Error(`第 ${item.lineNumber} 行缺少产品名称或单位。`);
     }
@@ -50,12 +38,12 @@ export function prepareConfirmedQuotation(
       taxRate: draft.quotation.taxRate,
       sourcePackageQuantity: item.sourcePackageQuantity,
       sourceUnit: item.sourceUnit,
-      normalizedUnit: group.baseUnit,
+      normalizedUnit: item.sourceUnit,
     });
     return {
       ...item,
       normalizedQuantity: 1,
-      normalizedUnit: group.baseUnit,
+      normalizedUnit: item.sourceUnit,
       normalizedTaxIncludedCnyPrice: normalizedPrice,
       normalizationDetails: {
         currency: draft.quotation.currency,
@@ -64,7 +52,7 @@ export function prepareConfirmedQuotation(
         taxRate: draft.quotation.taxRate,
         sourceUnit: item.sourceUnit,
         sourcePackageQuantity: item.sourcePackageQuantity,
-        normalizedUnit: group.baseUnit,
+        normalizedUnit: item.sourceUnit,
         formula: '原始单价 × 固定汇率 × 税率系数 ÷ 包装数量',
       },
       reviewIssues: [],
@@ -100,13 +88,9 @@ export async function handleQuotationConfirmRequest(req: ApiRequest, res: ApiRes
   }
 
   try {
-    const db = await getMongoDb();
-    const groupIds = [...new Set(draft.items.map(item => item.productGroupId).filter((value): value is string => Boolean(value)))];
-    const groups = await db.collection<StringIdDocument<SupplierProductGroup>>('supplier_product_groups')
-      .find({ _id: { $in: groupIds } })
-      .toArray();
-    const confirmed = prepareConfirmedQuotation(draft, groups, QUOTATION_WORKSPACE_ACTOR);
+    const confirmed = prepareConfirmedQuotation(draft, QUOTATION_WORKSPACE_ACTOR);
 
+    const db = await getMongoDb();
     const client = await getMongoClient();
     const session = client.startSession();
     try {

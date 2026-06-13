@@ -6,7 +6,6 @@ import {
 } from '../lib/cloudbaseData';
 import type {
   QuotationDraft,
-  SupplierProductGroup,
   SupplierProfile,
   SupplierQuotation,
   SupplierQuotationItem,
@@ -17,17 +16,15 @@ export interface QuotationWorkspace {
   quotations: SupplierQuotation[];
   items: SupplierQuotationItem[];
   suppliers: SupplierProfile[];
-  productGroups: SupplierProductGroup[];
 }
 
 export async function loadQuotationWorkspace(): Promise<QuotationWorkspace> {
-  const [quotations, items, suppliers, productGroups] = await Promise.all([
+  const [quotations, items, suppliers] = await Promise.all([
     listDocuments<SupplierQuotation>(cloudbaseCollections.supplierQuotations),
     listDocuments<SupplierQuotationItem>(cloudbaseCollections.supplierQuotationItems),
     listDocuments<SupplierProfile>(cloudbaseCollections.supplierProfiles),
-    listDocuments<SupplierProductGroup>(cloudbaseCollections.supplierProductGroups),
   ]);
-  return { quotations, items, suppliers, productGroups };
+  return { quotations, items, suppliers };
 }
 
 export async function saveQuotationDraft(draft: QuotationDraft): Promise<void> {
@@ -53,10 +50,6 @@ export async function confirmQuotationDraft(draft: QuotationDraft): Promise<Quot
 
 export async function saveSupplierProfile(profile: SupplierProfile): Promise<void> {
   await setDocument(cloudbaseCollections.supplierProfiles, profile.id, profile);
-}
-
-export async function saveProductGroup(group: SupplierProductGroup): Promise<void> {
-  await setDocument(cloudbaseCollections.supplierProductGroups, group.id, group);
 }
 
 export async function saveQuotationItem(item: SupplierQuotationItem): Promise<void> {
