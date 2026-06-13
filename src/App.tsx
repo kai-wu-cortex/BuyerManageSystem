@@ -241,8 +241,8 @@ export function mergeSampleRecordsById(
 }
 
 export default function App() {
-  const { starredIds } = useStarredPOs();
   const authUser = WORKSPACE_USER;
+  const { starredIds } = useStarredPOs(authUser);
 
   // ref：跟踪云端初始数据是否已加载完，避免「用户改了 → 云端拉回又覆盖回去」
   const cloudDataInitializedRef = useRef({
@@ -302,6 +302,9 @@ export default function App() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [samples, setSamples] = useState<SampleRecord[]>([]);
   const [notes, setNotes] = useState<Record<string, StickyNote>>({});
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+  const pendingCloudWritesRef = useRef<Array<() => Promise<void>>>([]);
 
   // Time Tracker state
   const [currentTime, setCurrentTime] = useState('');
@@ -419,6 +422,12 @@ export default function App() {
           return liveNotes;
         });
         cloudDataInitializedRef.current.notes = true;
+        const pending = pendingCloudWritesRef.current.splice(0);
+        for (const write of pending) {
+          void write().catch(error => {
+            handleCloudbaseError(error, OperationType.WRITE, cloudbaseCollections.notes);
+          });
+        }
       })
       .catch(error => {
         try {
@@ -506,10 +515,10 @@ export default function App() {
         return;
       }
       if (!cloudDataInitializedRef.current.notes) {
-        console.warn('Notes: 云端尚未初始化，写入延后');
+        pendingCloudWritesRef.current.push(() => replaceRecordCollection(cloudbaseCollections.notes, updatedNotes, notesRef.current));
         return;
       }
-      await replaceRecordCollection(cloudbaseCollections.notes, updatedNotes, notes);
+      await replaceRecordCollection(cloudbaseCollections.notes, updatedNotes, notesRef.current);
     } catch (error) {
       handleCloudbaseError(error, OperationType.WRITE, cloudbaseCollections.notes);
     }
@@ -1262,6 +1271,7 @@ export default function App() {
                       onClearAutoAddNote={() => setAutoAddNotePOId(null)}
                       notes={notes}
                       onNotesChange={handleUpdateNotes}
+                      authUser={authUser}
                     />
                   )}
                 </>

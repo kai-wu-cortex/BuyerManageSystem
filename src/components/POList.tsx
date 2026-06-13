@@ -333,7 +333,7 @@ export default function POList({
   notes,
   authUser = null
 }: POListProps) {
-  const { starredIds, toggleStar } = useStarredPOs();
+  const { starredIds, toggleStar } = useStarredPOs(authUser);
 
   // Load sticky notes count map for badges
   const [poNotesMap, setPoNotesMap] = useState<Record<string, number>>({});
@@ -473,10 +473,12 @@ export default function POList({
   });
 
   useEffect(() => {
+    if (!userInitiatedSortRef.current) return;
     localStorage.setItem('po_list_sheet_sort_field', sheetSortField);
   }, [sheetSortField]);
 
   useEffect(() => {
+    if (!userInitiatedSortRef.current) return;
     localStorage.setItem('po_list_sheet_sort_order', sheetSortOrder);
   }, [sheetSortOrder]);
 
@@ -636,6 +638,7 @@ export default function POList({
   }, [columnWidths]);
 
   const cloudSettingsLoadedRef = useRef(false);
+  const userInitiatedSortRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -665,6 +668,7 @@ export default function POList({
         setColumnsList(sanitizeLedgerColumnsList(settings.columnsList, DEFAULT_COLUMNS));
         setHiddenFields(sanitizeHiddenFields(settings.hiddenFields, DEFAULT_COLUMNS));
         setColumnWidths(sanitizeColumnWidths(settings.columnWidths, DEFAULT_COLUMN_WIDTHS));
+        userInitiatedSortRef.current = true;
       })
       .catch(error => {
         console.warn('Failed to load ledger view settings from CloudBase:', error);
@@ -838,6 +842,7 @@ export default function POList({
   };
 
   const handleSheetSort = (field: keyof FlatLedgerRow) => {
+    userInitiatedSortRef.current = true;
     if (sheetSortField === field) {
       setSheetSortOrder(sheetSortOrder === 'asc' ? 'desc' : 'asc');
     } else {
@@ -1334,7 +1339,7 @@ export default function POList({
                 <div className="flex items-center gap-2">
                   <select
                     value={sheetSortField}
-                    onChange={(e) => setSheetSortField(e.target.value as keyof FlatLedgerRow)}
+                    onChange={(e) => { userInitiatedSortRef.current = true; setSheetSortField(e.target.value as keyof FlatLedgerRow); }}
                     className="py-1.5 px-3 border border-slate-200 rounded-lg bg-white text-xs font-sans font-semibold text-slate-705 outline-none focus:border-[#2563EB] transition-colors cursor-pointer"
                   >
                     {columnsList.map(col => (
@@ -1343,7 +1348,7 @@ export default function POList({
                   </select>
                   <button
                     type="button"
-                    onClick={() => setSheetSortOrder(sheetSortOrder === 'asc' ? 'desc' : 'asc')}
+                    onClick={() => { userInitiatedSortRef.current = true; setSheetSortOrder(sheetSortOrder === 'asc' ? 'desc' : 'asc'); }}
                     className="flex items-center gap-1 py-1.5 px-3.5 border border-slate-200 hover:border-slate-300 rounded-lg bg-white text-xs font-bold text-slate-650 hover:text-slate-900 cursor-pointer shadow-xs transition-all active:scale-95"
                   >
                     <span>{sheetSortOrder === 'asc' ? '升序 (Asc)' : '降序 (Desc)'}</span>

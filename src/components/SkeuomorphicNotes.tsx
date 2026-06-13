@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { PurchaseOrder, Comment, StickyNoteItem, StickyNote } from '../types';
 import { useStarredPOs } from '../lib/hooks';
+import type { CloudbaseAuthUser } from '../lib/cloudbaseData';
 import {
   Pin,
   Paperclip,
@@ -34,6 +35,7 @@ interface SkeuomorphicNotesProps {
   onClearAutoAddNote?: () => void;
   notes?: Record<string, StickyNote>;
   onNotesChange?: (updated: Record<string, StickyNote>) => void;
+  authUser?: CloudbaseAuthUser | null;
 }
 
 export default function SkeuomorphicNotes({
@@ -43,14 +45,15 @@ export default function SkeuomorphicNotes({
   autoAddNote,
   onClearAutoAddNote,
   notes: propsNotes,
-  onNotesChange
+  onNotesChange,
+  authUser = null
 }: SkeuomorphicNotesProps) {
   const [internalNotes, setInternalNotes] = useState<Record<string, StickyNote>>({});
   const notes = propsNotes !== undefined ? propsNotes : internalNotes;
   const [selectedPOId, setSelectedPOId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'hasNotes' | 'starred'>('all');
-  const { starredIds, toggleStar } = useStarredPOs();
+  const { starredIds, toggleStar } = useStarredPOs(authUser);
   
   // Multiple notes active editing tracking
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);

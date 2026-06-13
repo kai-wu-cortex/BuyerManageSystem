@@ -61,7 +61,19 @@ function fileToDataUrl(file: File): Promise<string> {
 export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
   const uid = authUser?.uid ?? 'anon';
 
-  const [items, setItems] = useState<NoteboardItem[]>([]);
+  const NOTEBOARD_STORAGE_KEY = 'noteboard_items';
+
+  const [items, setItems] = useState<NoteboardItem[]>(() => {
+    try {
+      const stored = localStorage.getItem(NOTEBOARD_STORAGE_KEY);
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return [];
+  });
+  const itemsRef = useRef<NoteboardItem[]>(items);
+  useEffect(() => { itemsRef.current = items; }, [items]);
+  const persistTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
   const [loading, setLoading] = useState(true);
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -201,6 +213,12 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
     };
   }, [uid]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(NOTEBOARD_STORAGE_KEY, JSON.stringify(items));
+    } catch {}
+  }, [items]);
+
   const orderedItems = useMemo(() => {
     // 排序按创建时间倒序，编辑/调宽度/换颜色都不会改变便签位置
     // 仅置顶状态变化会让置顶卡片浮到最前
@@ -230,6 +248,18 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
     }
   };
 
+  const debouncedPersist = (item: NoteboardItem, delay = 800) => {
+    const existing = persistTimersRef.current.get(item.id);
+    if (existing) clearTimeout(existing);
+    persistTimersRef.current.set(
+      item.id,
+      setTimeout(() => {
+        persistTimersRef.current.delete(item.id);
+        void persistItem(item);
+      }, delay)
+    );
+  };
+
   const handleAddNote = () => {
     const now = new Date().toISOString();
     const newItem: NoteboardItem = {
@@ -246,18 +276,25 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
   };
 
   const handleUpdateItem = (id: string, patch: Partial<NoteboardItem>) => {
-    setItems(prev => {
-      const next = prev.map(item => {
-        if (item.id !== id) return item;
-        return { ...item, ...patch, updatedAt: new Date().toISOString() };
-      });
-      const target = next.find(item => item.id === id);
-      if (target) void persistItem(target);
-      return next;
-    });
+    const now = new Date().toISOString();
+    setItems(prev =>
+      prev.map(item =>
+        item.id === id ? { ...item, ...patch, updatedAt: now } : item
+      )
+    );
+    const current = itemsRef.current.find(item => item.id === id);
+    if (current) {
+      const merged = { ...current, ...patch, updatedAt: now };
+      if ('html' in patch) {
+        debouncedPersist(merged, 800);
+      } else {
+        debouncedPersist(merged, 300);
+      }
+    }
   };
 
   const handleDeleteItem = async (id: string) => {
+    const deletedItem = itemsRef.current.find(item => item.id === id);
     setItems(prev => prev.filter(item => item.id !== id));
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -268,6 +305,9 @@ export default function NoteboardCanvas({ authUser }: NoteboardCanvasProps) {
       await deleteDocument(COLLECTION, ownerDocId(uid, id));
     } catch (err) {
       console.error('Delete noteboard item failed', err);
+      if (deletedItem) {
+        setItems(prev => [...prev, deletedItem]);
+      }
     }
   };
 

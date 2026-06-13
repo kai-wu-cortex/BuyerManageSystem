@@ -299,7 +299,7 @@ export default function Dashboard({
     return saved ? JSON.parse(saved) : DEFAULT_VISIBLE_FIELDS;
   })());
   
-  const { starredIds } = useStarredPOs();
+  const { starredIds } = useStarredPOs(authUser);
   const [modalView, setModalView] = useState<'none' | 'starred' | 'transit' | 'warning'>('none');
   const [selectedPOId, setSelectedPOId] = useState<string | null>(null);
   
