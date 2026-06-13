@@ -41,6 +41,8 @@ interface Props {
   workspace: QuotationWorkspace;
   loading: boolean;
   onRefresh: () => Promise<void>;
+  initialPreviewId?: string | null;
+  onPreviewClosed?: () => void;
 }
 
 const MAX_SIZE = 25 * 1024 * 1024;
@@ -411,7 +413,7 @@ function ExcelPreview({ pathname }: { pathname: string }) {
   );
 }
 
-export default function QuotationArchive({ workspace, loading, onRefresh }: Props) {
+export default function QuotationArchive({ workspace, loading, onRefresh, initialPreviewId, onPreviewClosed }: Props) {
   const [status, setStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showUpload, setShowUpload] = useState(false);
@@ -420,7 +422,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
   const [error, setError] = useState<string | null>(null);
   const [parseMode, setParseMode] = useState<'internal' | 'gemini' | 'display'>('internal');
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [previewQuotationId, setPreviewQuotationId] = useState<string | null>(null);
+  const [previewQuotationId, setPreviewQuotationId] = useState<string | null>(initialPreviewId ?? null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDelete = async (quotationId: string) => {
@@ -631,7 +633,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
           quotation={previewQuotation}
           items={previewItems}
           supplier={previewSupplier}
-          onClose={() => setPreviewQuotationId(null)}
+          onClose={() => { setPreviewQuotationId(null); onPreviewClosed?.(); }}
           onSaved={onRefresh}
         />
       )}

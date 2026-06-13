@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Building2, Eye, Mail, Phone, Save, Star, Trash2, TrendingUp, User } from 'lucide-react';
+import { Building2, Eye, Mail, Phone, Pencil, Save, Star, Trash2, TrendingUp, User } from 'lucide-react';
 import { deleteSupplier, saveSupplierProfile } from '../../quotation/api';
 import { deriveQuotationDisplayStatus } from '../../quotation/normalization';
 import type { SupplierProfile, SupplierQuotation, SupplierQuotationItem } from '../../quotation/types';
@@ -11,9 +11,10 @@ interface Props {
   items: SupplierQuotationItem[];
   onSaved: () => Promise<void>;
   onOpenQuotation: (id: string) => void;
+  onPreviewQuotation: (id: string) => void;
 }
 
-export default function SupplierProfiles({ suppliers, quotations, items, onSaved, onOpenQuotation }: Props) {
+export default function SupplierProfiles({ suppliers, quotations, items, onSaved, onOpenQuotation, onPreviewQuotation }: Props) {
   const [selectedId, setSelectedId] = useState(suppliers[0]?.id ?? '');
   const selected = suppliers.find(supplier => supplier.id === selectedId) ?? suppliers[0];
   const [draft, setDraft] = useState<SupplierProfile | null>(selected ?? null);
@@ -102,7 +103,7 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
         <table className="w-full text-xs"><thead><tr className="border-b border-slate-200 bg-slate-50">{['报价单号', '日期', '物料明细', '币种', '状态', '操作'].map(label => <th key={label} className="px-4 py-2.5 text-left font-semibold text-slate-500">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{history.map(quotation => {
           const quoteItems = items.filter(item => item.quotationId === quotation.id && !item.deletedAt);
           const status = deriveQuotationDisplayStatus(quotation.status, quotation.validUntil);
-          return <tr key={quotation.id} className="hover:bg-slate-50"><td className="px-4 py-3 font-mono font-semibold text-blue-600">{quotation.quotationNumber || quotation.id}</td><td className="px-4 py-3 text-slate-600">{formatDate(quotation.quotationDate)}</td><td className="max-w-xs truncate px-4 py-3 text-slate-600">{quoteItems.map(item => item.sourceProductName).filter(Boolean).slice(0, 3).join('、') || '-'}</td><td className="px-4 py-3">{quotation.currency}</td><td className="px-4 py-3"><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusColor(status)}`}>{getStatusLabel(status)}</span></td><td className="px-4 py-3"><button type="button" onClick={() => onOpenQuotation(quotation.id)} className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></button></td></tr>;
+          return <tr key={quotation.id} className="hover:bg-slate-50"><td className="px-4 py-3 font-mono font-semibold text-blue-600">{quotation.quotationNumber || quotation.id}</td><td className="px-4 py-3 text-slate-600">{formatDate(quotation.quotationDate)}</td><td className="max-w-xs truncate px-4 py-3 text-slate-600">{quoteItems.map(item => item.sourceProductName).filter(Boolean).slice(0, 3).join('、') || '-'}</td><td className="px-4 py-3">{quotation.currency}</td><td className="px-4 py-3"><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusColor(status)}`}>{getStatusLabel(status)}</span></td><td className="px-4 py-3"><div className="flex items-center gap-1"><a href={`/api/quotation/file?pathname=${encodeURIComponent(quotation.sourceFile.pathname)}`} target="_blank" rel="noreferrer" className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></a><button type="button" onClick={() => onPreviewQuotation(quotation.id)} className="rounded p-1.5 text-slate-400 hover:bg-amber-50 hover:text-amber-600"><Pencil className="h-4 w-4" /></button></div></td></tr>;
         })}</tbody></table>
         {history.length === 0 ? <div className="p-10 text-center text-xs text-slate-500">暂无历史报价。</div> : null}
       </div>

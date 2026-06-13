@@ -25,9 +25,7 @@ export function isAllowedQuotationFile(pathname: string, contentType: string): b
 }
 
 export function getQuotationFileDisposition(contentType: string, fileName: string): string {
-  const disposition = contentType === 'application/pdf' || contentType.startsWith('image/')
-    ? 'inline'
-    : 'attachment';
+  const disposition = 'inline';
   const cleanName = fileName.replace(/["\r\n]/g, '_');
   if (/^[\x20-\x7e]+$/.test(cleanName)) {
     return `${disposition}; filename="${cleanName}"`;

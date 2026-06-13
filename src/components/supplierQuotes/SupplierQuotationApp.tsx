@@ -31,6 +31,7 @@ export default function SupplierQuotationApp() {
   const [workspace, setWorkspace] = useState<QuotationWorkspace>(EMPTY_WORKSPACE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [previewQuotationId, setPreviewQuotationId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -48,6 +49,11 @@ export default function SupplierQuotationApp() {
     void refresh();
   }, [refresh]);
 
+  const handlePreviewFromProfiles = (quotationId: string) => {
+    setPreviewQuotationId(quotationId);
+    setActiveView('archive');
+  };
+
   const renderContent = () => {
     switch (activeView) {
       case 'archive':
@@ -56,6 +62,8 @@ export default function SupplierQuotationApp() {
             workspace={workspace}
             loading={loading}
             onRefresh={refresh}
+            initialPreviewId={previewQuotationId}
+            onPreviewClosed={() => setPreviewQuotationId(null)}
           />
         );
       case 'profiles':
@@ -66,6 +74,7 @@ export default function SupplierQuotationApp() {
             items={workspace.items}
             onSaved={refresh}
             onOpenQuotation={() => {}}
+            onPreviewQuotation={handlePreviewFromProfiles}
           />
         );
       default:
