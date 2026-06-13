@@ -2,18 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Archive,
   Building2,
-  CheckCircle2,
-  Clock,
-  Package,
 } from 'lucide-react';
 import QuotationArchive from './QuotationArchive';
 import QuotationReview from './QuotationReview';
 import SupplierProfiles from './SupplierProfiles';
-import QuotationComparison from './QuotationComparison';
-import ProductGroups from './ProductGroups';
 import { loadQuotationWorkspace, type QuotationWorkspace } from '../../quotation/api';
 
-type QuotationView = 'archive' | 'review' | 'profiles' | 'comparison' | 'groups';
+type QuotationView = 'archive' | 'review' | 'profiles';
 
 interface NavItem {
   id: QuotationView;
@@ -30,10 +25,7 @@ const EMPTY_WORKSPACE: QuotationWorkspace = {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'archive', label: '全部报价', icon: <Archive className="h-4 w-4" /> },
-  { id: 'review', label: '待审核', icon: <Clock className="h-4 w-4" /> },
   { id: 'profiles', label: '供应商', icon: <Building2 className="h-4 w-4" /> },
-  { id: 'comparison', label: '比价', icon: <CheckCircle2 className="h-4 w-4" /> },
-  { id: 'groups', label: '分组', icon: <Package className="h-4 w-4" /> },
 ];
 
 export default function SupplierQuotationApp() {
@@ -76,12 +68,6 @@ export default function SupplierQuotationApp() {
     setActiveView('review');
   };
 
-  const openPendingReview = () => {
-    const pending = workspace.quotations.find(quotation => quotation.status === 'review_required');
-    if (pending) setSelectedQuotationId(pending.id);
-    setActiveView('review');
-  };
-
   const renderContent = () => {
     switch (activeView) {
       case 'archive':
@@ -114,10 +100,6 @@ export default function SupplierQuotationApp() {
             onOpenQuotation={openReview}
           />
         );
-      case 'comparison':
-        return <QuotationComparison workspace={workspace} />;
-      case 'groups':
-        return <ProductGroups workspace={workspace} onSaved={refresh} />;
       default:
         return null;
     }
@@ -154,7 +136,7 @@ export default function SupplierQuotationApp() {
             <button
               key={item.id}
               type="button"
-              onClick={() => item.id === 'review' ? openPendingReview() : setActiveView(item.id)}
+              onClick={() => setActiveView(item.id)}
               className={`flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors ${
                 isActive
                   ? 'text-blue-600'
