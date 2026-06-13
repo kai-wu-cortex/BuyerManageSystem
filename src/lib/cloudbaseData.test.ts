@@ -4,16 +4,13 @@ import {
   createBuyerSystemViewSettingsRecord,
   createLedgerBackupDocuments,
   formatLedgerBackupSize,
-  getBuyerSystemAccess,
   getBuyerSystemViewSettingsDocumentId,
   getLatestLedgerBackup,
   isLedgerBackupNewerThanLoaded,
   loadBuyerSystemViewSettings,
   normalizeCloudbaseDocumentId,
-  normalizeCloudbaseUsername,
   setDocument,
   sortBackupsNewestFirst,
-  validateCloudbaseLoginInput,
 } from './cloudbaseData';
 import type { PurchaseOrder } from '../types';
 
@@ -90,24 +87,6 @@ assert.equal(isLedgerBackupNewerThanLoaded(getLatestLedgerBackup(backups), 299),
 assert.equal(isLedgerBackupNewerThanLoaded(getLatestLedgerBackup(backups), 300), false);
 assert.equal(formatLedgerBackupSize(2048), '2.0 KB');
 assert.equal(formatLedgerBackupSize(0), '未知');
-
-assert.equal(normalizeCloudbaseUsername('  buyer_admin  '), 'buyer_admin');
-assert.equal(validateCloudbaseLoginInput('buyer_admin', 'secret123'), null);
-assert.equal(validateCloudbaseLoginInput('   ', 'secret123'), '请输入用户名。');
-assert.equal(validateCloudbaseLoginInput('buyer_admin', ''), '请输入密码。');
-
-assert.deepEqual(getBuyerSystemAccess({ uid: '1', username: 'caigou', email: null }), {
-  mode: 'full',
-  label: '采购',
-});
-assert.deepEqual(getBuyerSystemAccess({ uid: '2', username: 'caiwu', email: null }), {
-  mode: 'ledgerUploadOnly',
-  label: '财务',
-});
-assert.deepEqual(getBuyerSystemAccess({ uid: '3', username: null, email: 'ops@example.com' }), {
-  mode: 'none',
-  label: '未授权',
-});
 
 const viewSettingsUser = { uid: 'user/采购 001', username: 'caigou', email: null };
 assert.equal(getBuyerSystemViewSettingsDocumentId(viewSettingsUser), 'buyer_system_view_settings_user____001');

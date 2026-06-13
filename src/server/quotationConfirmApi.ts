@@ -6,7 +6,8 @@ import type {
   QuotationDraft,
   SupplierProductGroup,
 } from '../quotation/types.ts';
-import { requireBuyerSession, SessionAuthError } from './sessionAuth.ts';
+
+const QUOTATION_WORKSPACE_ACTOR = 'quotation-workspace';
 
 type ApiRequest = IncomingMessage & { method?: string; body?: unknown };
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
@@ -93,16 +94,6 @@ export async function handleQuotationConfirmRequest(req: ApiRequest, res: ApiRes
     return sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Only POST is supported.');
   }
 
-  let actor;
-  try {
-    actor = requireBuyerSession(req, process.env.SESSION_SECRET ?? '');
-  } catch (error) {
-    if (error instanceof SessionAuthError) {
-      return sendError(res, error.statusCode, error.code, error.message);
-    }
-    return sendError(res, 503, 'SESSION_NOT_CONFIGURED', '服务端会话尚未配置。');
-  }
-
   const draft = req.body as QuotationDraft | undefined;
   if (!draft?.quotation || !Array.isArray(draft.items)) {
     return sendError(res, 400, 'INVALID_BODY', '报价确认请求格式无效。');
@@ -114,7 +105,7 @@ export async function handleQuotationConfirmRequest(req: ApiRequest, res: ApiRes
     const groups = await db.collection<StringIdDocument<SupplierProductGroup>>('supplier_product_groups')
       .find({ _id: { $in: groupIds } })
       .toArray();
-    const confirmed = prepareConfirmedQuotation(draft, groups, actor.username);
+    const confirmed = prepareConfirmedQuotation(draft, groups, QUOTATION_WORKSPACE_ACTOR);
 
     const client = await getMongoClient();
     const session = client.startSession();
@@ -148,7 +139,7 @@ export async function handleQuotationConfirmRequest(req: ApiRequest, res: ApiRes
           objectType: 'quotation',
           objectId: confirmed.quotation.id,
           action: 'confirm',
-          actor: actor.username,
+          actor: QUOTATION_WORKSPACE_ACTOR,
           createdAt: confirmed.quotation.confirmedAt,
           summary: `确认报价单并重算 ${confirmed.items.length} 条标准化价格`,
         }, { session });

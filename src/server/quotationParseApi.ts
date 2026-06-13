@@ -3,7 +3,6 @@ import type { Response } from 'express';
 import { get } from '@vercel/blob';
 import { GoogleGenAI, Type } from '@google/genai';
 import { validateParsedQuotation } from '../quotation/quotationParser.ts';
-import { requireBuyerSession, SessionAuthError } from './sessionAuth.ts';
 
 type ApiRequest = IncomingMessage & {
   method?: string;
@@ -24,15 +23,6 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
     res.setHeader('Allow', 'POST');
     return sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Only POST is supported.');
   }
-  try {
-    requireBuyerSession(req, process.env.SESSION_SECRET ?? '');
-  } catch (error) {
-    if (error instanceof SessionAuthError) {
-      return sendError(res, error.statusCode, error.code, error.message);
-    }
-    return sendError(res, 503, 'SESSION_NOT_CONFIGURED', '服务端会话尚未配置。');
-  }
-
   const pathname = typeof req.body?.pathname === 'string' ? req.body.pathname : '';
   const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType : '';
   if (!pathname.startsWith('supplier-quotes/') || (!mimeType.startsWith('image/') && mimeType !== 'application/pdf')) {

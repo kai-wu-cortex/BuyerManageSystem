@@ -3,7 +3,6 @@ import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POSt
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { parseClipboardLine } from './utils/ledgerHelper';
 import { analyzeLedgerHeaders, rowsToLedgerLines } from './utils/ledgerImport';
-import SystemLogin from './components/SystemLogin';
 import {
   Dashboard,
   NoteboardCanvas,
@@ -21,8 +20,6 @@ import {
   clearCloudbaseCollections,
   cloudbaseCollections,
   formatLedgerBackupSize,
-  getCurrentCloudbaseUser,
-  getBuyerSystemAccess,
   getDocument,
   getLatestLedgerBackup,
   handleCloudbaseError,
@@ -35,8 +32,6 @@ import {
   replaceCollection,
   replaceRecordCollection,
   saveLedgerBackup,
-  signInToCloudbase,
-  signOutFromCloudbase,
   type CloudbaseAuthUser,
   type LedgerBackup,
 } from './lib/cloudbaseData';
@@ -58,9 +53,7 @@ import {
   FileJson,
   FileSpreadsheet,
   Loader2,
-  LogOut,
 } from 'lucide-react';
-type AuthStatus = 'checking' | 'authenticated' | 'unauthenticated';
 
 const navigationTabs: { id: AppTab; label: string; icon: React.ReactNode }[] = [
   { id: 'dashboard', label: '采购物料大屏', icon: <BarChart3 className="w-5 h-5 shrink-0" /> },
@@ -83,6 +76,13 @@ const MODULE_FALLBACK_LABELS: Record<AppTab, string> = {
   noteboard: '便签画板',
   'supplier-summary': '供应商汇总',
   'supplier-quotes': '供应商报价',
+};
+
+const WORKSPACE_USER: CloudbaseAuthUser = {
+  uid: 'quotation-workspace',
+  username: '采购工作区',
+  email: null,
+  role: 'caigou',
 };
 
 function ModuleLoadingFallback({ label }: { label: string }) {
@@ -242,11 +242,7 @@ export function mergeSampleRecordsById(
 
 export default function App() {
   const { starredIds } = useStarredPOs();
-  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
-  const [authUser, setAuthUser] = useState<CloudbaseAuthUser | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [isSigningIn, setIsSigningIn] = useState(false);
-  const userAccess = getBuyerSystemAccess(authUser);
+  const authUser = WORKSPACE_USER;
 
   // ref：跟踪云端初始数据是否已加载完，避免「用户改了 → 云端拉回又覆盖回去」
   const cloudDataInitializedRef = useRef({
@@ -333,41 +329,8 @@ export default function App() {
     writeStoredLedgerBackupTime(rawTime);
   };
 
-  useEffect(() => {
-    let isMounted = true;
-
-    if (!isCloudbaseConfigured()) {
-      setAuthStatus('unauthenticated');
-      setAuthError('请先配置 VITE_CLOUDBASE_ENV_ID 和 VITE_CLOUDBASE_ACCESS_KEY。');
-      return () => {
-        isMounted = false;
-      };
-    }
-
-    void getCurrentCloudbaseUser()
-      .then(user => {
-        if (!isMounted) return;
-        setAuthUser(user);
-        setAuthStatus(user ? 'authenticated' : 'unauthenticated');
-      })
-      .catch(error => {
-        if (!isMounted) return;
-        setAuthUser(null);
-        setAuthStatus('unauthenticated');
-        setAuthError(getErrorMessage(error));
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
   // Initial load & real-time CloudBase sync
   useEffect(() => {
-    if (authStatus !== 'authenticated' || userAccess.mode !== 'full') {
-      return undefined;
-    }
-
     // 1. Sync Purchase Orders from localStorage
     const savedPO = localStorage.getItem("purchase_orders");
     if (savedPO) {
@@ -480,7 +443,7 @@ export default function App() {
     return () => {
       clearInterval(clockInterval);
     };
-  }, [authStatus, userAccess.mode]);
+  }, []);
 
   // Sync state values on changes directly to CloudBase
   const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
@@ -884,9 +847,6 @@ export default function App() {
 
         // Save to CloudBase as backup
         await backupToCloudbase(merged);
-        if (userAccess.mode === 'ledgerUploadOnly') {
-          await loadHistoryBackups();
-        }
       } else {
         alert("未能在文件中解析出任何有效的订单账目。请检查列分录是否和标准 36 列采购合规台账兼容。");
       }
@@ -965,213 +925,8 @@ export default function App() {
     }
   };
 
-  const handleSignIn = async (username: string, password: string) => {
-    setIsSigningIn(true);
-    setAuthError(null);
-    try {
-      const user = await signInToCloudbase(username, password);
-      setAuthUser(user);
-      setAuthStatus('authenticated');
-    } catch (error) {
-      setAuthUser(null);
-      setAuthStatus('unauthenticated');
-      setAuthError(getErrorMessage(error));
-    } finally {
-      setIsSigningIn(false);
-    }
-  };
-
-  const handleSignOut = async () => {
-    try {
-      await signOutFromCloudbase();
-    } catch (error) {
-      console.error('Sign out failed:', error);
-    } finally {
-      setAuthUser(null);
-      setAuthStatus('unauthenticated');
-      setPurchaseOrders([]);
-      setInventory([]);
-      setSamples([]);
-      setNotes({});
-    }
-  };
-
-  useEffect(() => {
-    if (authStatus === 'authenticated' && userAccess.mode === 'ledgerUploadOnly') {
-      void loadHistoryBackups();
-    }
-  }, [authStatus, userAccess.mode]);
-
   const applyingSamplesCount = samples.filter(s => s.status === '申请中').length;
   const hasLedgerUpdate = isLedgerBackupNewerThanLoaded(latestRemoteLedgerBackup, loadedLedgerBackupRawTime);
-
-  if (authStatus === 'checking') {
-    return (
-      <div className="min-h-screen bg-[#0F172A] text-white flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-300" />
-          <p className="text-xs font-bold tracking-[0.2em] uppercase text-slate-400">CloudBase Auth Checking</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (authStatus === 'unauthenticated') {
-    return (
-      <SystemLogin
-        isConfigured={isCloudbaseConfigured()}
-        isSigningIn={isSigningIn}
-        error={authError}
-        onSignIn={handleSignIn}
-      />
-    );
-  }
-
-  if (userAccess.mode === 'ledgerUploadOnly') {
-    return (
-      <div className="min-h-screen bg-[#F1F5F9] text-slate-900 flex items-center justify-center p-6">
-        <div className="w-full max-w-4xl rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
-          <div className="px-6 py-5 border-b border-slate-100 bg-[#111827] text-white flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-blue-500/15 border border-blue-400/30 flex items-center justify-center">
-                <UploadCloud className="h-5 w-5 text-blue-300" />
-              </div>
-              <div>
-                <h1 className="text-lg font-black tracking-tight">财务台账上传</h1>
-                <p className="text-xs font-semibold text-slate-400 mt-0.5">CloudBase 用户: {authUser?.username ?? authUser?.uid}</p>
-              </div>
-            </div>
-            <button
-              onClick={handleSignOut}
-              className="h-8 w-8 rounded border border-white/10 bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 flex items-center justify-center transition"
-              title="退出登入"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="p-8 space-y-6">
-            <div>
-              <p className="text-sm font-bold text-slate-800">仅开放上传台账功能</p>
-              <p className="mt-2 text-xs leading-6 text-slate-500">
-                当前账号为财务权限，不显示采购大屏、采购单列表、样品追踪和订单便签模块。
-              </p>
-            </div>
-
-            <input
-              type="file"
-              accept=".xlsx,.json,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              className="hidden"
-              ref={fileInputRef}
-              onClick={event => {
-                event.currentTarget.value = '';
-              }}
-              onChange={handleFileUpload}
-            />
-
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className="w-full rounded-xl bg-blue-600 px-5 py-4 text-sm font-black text-white transition hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <UploadCloud className="h-5 w-5" />
-              {isUploading ? '正在上传台账...' : '上传 XLSX / JSON 台账'}
-            </button>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-200 bg-white flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <Cloud className="w-5 h-5 text-blue-500 stroke-[2]" />
-                  <div>
-                    <h2 className="text-sm font-black text-slate-800">历史台账备份</h2>
-                    <p className="text-[10px] text-slate-400 font-semibold mt-0.5">读取 CloudBase ledger_backups 集合</p>
-                  </div>
-                </div>
-                <button
-                  onClick={loadHistoryBackups}
-                  disabled={isLoadingHistory}
-                  className="px-3 py-1.5 bg-white border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-200 text-[10.5px] font-bold rounded-lg flex items-center gap-1.5 transition-all shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isLoadingHistory ? 'animate-spin' : ''}`} />
-                  刷新
-                </button>
-              </div>
-
-              <div className="p-5">
-                {historyLoadError && (
-                  <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-600">
-                    {historyLoadError}
-                  </div>
-                )}
-
-                {isLoadingHistory ? (
-                  <div className="py-10 flex flex-col items-center justify-center gap-3">
-                    <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
-                    <p className="text-xs text-slate-500 font-bold">正在拉取云端历史台账...</p>
-                  </div>
-                ) : historyBackups.length === 0 ? (
-                  <div className="py-10 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center gap-3 bg-white">
-                    <FileJson className="w-9 h-9 text-slate-300 stroke-[1.5]" />
-                    <div className="text-center space-y-1 px-4">
-                      <p className="text-xs font-bold text-slate-600">云端暂无备份文件</p>
-                      <p className="text-[10.5px] text-slate-400 leading-relaxed">上传台账后会自动保存至 CloudBase，可在这里查看历史记录。</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
-                    {historyBackups.map(backup => (
-                      <div
-                        key={backup.id}
-                        className="p-3 border border-slate-150 rounded-xl bg-white hover:border-blue-300 transition-all flex items-center justify-between gap-3"
-                      >
-                        <div className="flex items-start gap-2.5 min-w-0">
-                          <FileJson className="w-5 h-5 text-blue-500 stroke-[1.5] mt-0.5 shrink-0" />
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold text-slate-700 font-mono leading-tight truncate">{backup.name}</p>
-                            <p className="text-[10px] text-slate-400 font-medium mt-1">
-                              备份时间: <strong className="text-slate-600">{backup.timeCreated}</strong>
-                            </p>
-                          </div>
-                        </div>
-                        <div className="shrink-0 flex flex-col items-end gap-1">
-                          <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600">
-                            {formatLedgerBackupSize(backup.size)}
-                          </span>
-                          <span className="text-[10px] font-bold text-slate-400">{backup.ordersCount ?? backup.orders?.length ?? 0} 笔订单</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (userAccess.mode === 'none') {
-    return (
-      <div className="min-h-screen bg-[#0F172A] text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white text-slate-900 shadow-2xl p-8">
-          <div className="h-11 w-11 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center">
-            <ShieldCheck className="h-5 w-5 text-red-600" />
-          </div>
-          <h1 className="mt-5 text-xl font-black tracking-tight">当前账号未配置系统权限</h1>
-          <p className="mt-3 text-sm leading-6 text-slate-500">
-            仅 `caigou` 可查看全部模块，`caiwu` 可上传台账。请切换到已授权账号。
-          </p>
-          <button
-            onClick={handleSignOut}
-            className="mt-6 w-full rounded-lg bg-slate-900 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
-          >
-            退出并重新登入
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-[#F1F5F9] flex flex-col font-sans text-slate-900 selection:bg-blue-100">
@@ -1343,19 +1098,10 @@ export default function App() {
 
             <div className="flex items-center gap-3 self-end sm:self-auto">
               <div className="flex flex-col items-end leading-none gap-0.5">
-                <span className="text-[9px] uppercase font-semibold text-slate-400 font-mono">User</span>
-                <div className="flex items-center gap-1.5">
-                  <span className="max-w-32 truncate font-mono text-[11px] font-bold text-slate-700">
-                    {authUser?.username ?? authUser?.email ?? authUser?.uid ?? '已登入'}
-                  </span>
-                  <button
-                    onClick={handleSignOut}
-                    className="h-6 w-6 rounded border border-slate-200 bg-white text-slate-500 hover:text-red-600 hover:border-red-200 hover:bg-red-50 flex items-center justify-center transition"
-                    title="退出登入"
-                  >
-                    <LogOut className="h-3 w-3" />
-                  </button>
-                </div>
+                <span className="text-[9px] uppercase font-semibold text-slate-400 font-mono">Workspace</span>
+                <span className="max-w-32 truncate font-mono text-[11px] font-bold text-slate-700">
+                  {authUser.username}
+                </span>
               </div>
               <div className="h-6 w-px bg-slate-200"></div>
               <div className="flex flex-col items-end gap-1">
