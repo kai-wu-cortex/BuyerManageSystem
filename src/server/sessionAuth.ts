@@ -16,6 +16,17 @@ interface SessionUser {
   role: UserRole;
 }
 
+export class SessionAuthError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly code: 'UNAUTHORIZED' | 'FORBIDDEN',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SessionAuthError';
+  }
+}
+
 const SESSION_COOKIE = 'buyer_session';
 const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8 hours
 
@@ -112,13 +123,13 @@ export function readSessionFromRequest(req: Pick<Request, 'headers'>, secret: st
 
 export function requireSession(req: Pick<Request, 'headers'>, secret: string): SessionUser {
   const user = readSessionFromRequest(req, secret);
-  if (!user) throw new Error('UNAUTHORIZED');
+  if (!user) throw new SessionAuthError(401, 'UNAUTHORIZED', 'UNAUTHORIZED: 请先登录。');
   return user;
 }
 
 export function requireBuyerSession(req: Pick<Request, 'headers'>, secret: string): SessionUser {
   const user = requireSession(req, secret);
-  if (user.role !== 'caigou') throw new Error('FORBIDDEN');
+  if (user.role !== 'caigou') throw new SessionAuthError(403, 'FORBIDDEN', 'FORBIDDEN: 当前账号无采购操作权限。');
   return user;
 }
 

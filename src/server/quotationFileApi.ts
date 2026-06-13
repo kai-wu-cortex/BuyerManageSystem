@@ -1,197 +1,102 @@
-import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
-import { head } from '@vercel/blob';
+import type { IncomingMessage } from 'node:http';
 import type { Response } from 'express';
-import { requireBuyerSession } from './sessionAuth.ts';
+import { get } from '@vercel/blob';
+import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
+import { requireBuyerSession, SessionAuthError } from './sessionAuth.ts';
 
-const ALLOWED_MIME_TYPES = new Set([
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
-  'application/vnd.ms-excel', // xls
+const ALLOWED_CONTENT_TYPES = [
   'application/pdf',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'image/png',
   'image/jpeg',
   'image/webp',
-]);
+];
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
-const ALLOWED_EXTENSIONS = new Set(['xlsx', 'xls', 'pdf', 'png', 'jpg', 'jpeg', 'webp']);
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
-
-type ApiRequest = {
+type ApiRequest = IncomingMessage & {
   method?: string;
-  body?: unknown;
-  params?: Record<string, unknown>;
-  headers?: Record<string, string | string[] | undefined>;
+  body?: HandleUploadBody;
+  query?: Record<string, unknown>;
 };
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader' | 'send'>;
 
-function sanitizeFilename(name: string): string {
-  return name
-    .replace(/[^a-zA-Z0-9\u4e00-\u9fff._-]/g, '_')
-    .replace(/_{2,}/g, '_')
-    .slice(0, 100);
+function authorize(req: ApiRequest, res: ApiResponse): boolean {
+  try {
+    requireBuyerSession(req, process.env.SESSION_SECRET ?? '');
+    return true;
+  } catch (error) {
+    const status = error instanceof SessionAuthError ? error.statusCode : 503;
+    const code = error instanceof SessionAuthError ? error.code : 'SESSION_NOT_CONFIGURED';
+    res.status(status).json({ success: false, code, message: error instanceof Error ? error.message : String(error) });
+    return false;
+  }
 }
 
-function getExtension(filename: string): string {
-  const parts = filename.split('.');
-  return parts.length > 1 ? parts[parts.length - 1]!.toLowerCase() : '';
+export function isAllowedQuotationFile(pathname: string, contentType: string): boolean {
+  return pathname.startsWith('supplier-quotes/') && ALLOWED_CONTENT_TYPES.includes(contentType);
 }
 
-function generateBlobPath(originalName: string, uploaderUid: string): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const uuid = crypto.randomUUID();
-  const safeName = sanitizeFilename(originalName);
-  return `supplier-quotes/${year}/${month}/${uploaderUid}-${uuid}-${safeName}`;
+export function getQuotationFileDisposition(contentType: string, fileName: string): string {
+  const disposition = contentType === 'application/pdf' || contentType.startsWith('image/')
+    ? 'inline'
+    : 'attachment';
+  const cleanName = fileName.replace(/["\r\n]/g, '_');
+  if (/^[\x20-\x7e]+$/.test(cleanName)) {
+    return `${disposition}; filename="${cleanName}"`;
+  }
+  const extension = cleanName.match(/(\.[a-zA-Z0-9]+)$/)?.[1] ?? '';
+  return `${disposition}; filename="quotation-file${extension}"; filename*=UTF-8''${encodeURIComponent(cleanName)}`;
 }
 
-export async function handleQuotationUploadToken(req: ApiRequest, res: ApiResponse): Promise<unknown> {
+export async function handleQuotationUploadRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, code: 'METHOD_NOT_ALLOWED', message: 'Only POST is supported.' });
   }
-
-  let user;
-  try {
-    user = requireBuyerSession({ headers: req.headers }, process.env.SESSION_SECRET || 'test-secret');
-  } catch {
-    return res.status(401).json({ success: false, code: 'UNAUTHORIZED', message: '请先登录。' });
+  if (!authorize(req, res)) return undefined;
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    return res.status(503).json({ success: false, code: 'BLOB_NOT_CONFIGURED', message: '私有文件存储尚未配置。' });
   }
 
-  const body = req.body as { filename?: unknown; mimeType?: unknown; size?: unknown } | undefined;
-  const filename = typeof body?.filename === 'string' ? body.filename : '';
-  const mimeType = typeof body?.mimeType === 'string' ? body.mimeType : '';
-  const size = typeof body?.size === 'number' ? body.size : 0;
-
-  if (!filename) {
-    return res.status(400).json({ success: false, code: 'INVALID_INPUT', message: '缺少文件名。' });
-  }
-
-  const ext = getExtension(filename);
-  if (!ALLOWED_EXTENSIONS.has(ext)) {
-    return res.status(400).json({
-      success: false,
-      code: 'INVALID_EXTENSION',
-      message: `不支持的文件格式: .${ext}。支持: ${[...ALLOWED_EXTENSIONS].join(', ')}`,
-    });
-  }
-
-  if (mimeType && !ALLOWED_MIME_TYPES.has(mimeType)) {
-    return res.status(400).json({
-      success: false,
-      code: 'INVALID_MIME_TYPE',
-      message: `不支持的文件类型: ${mimeType}`,
-    });
-  }
-
-  if (size > MAX_FILE_SIZE) {
-    return res.status(400).json({
-      success: false,
-      code: 'FILE_TOO_LARGE',
-      message: `文件大小超过限制: ${(size / 1024 / 1024).toFixed(1)}MB > 25MB`,
-    });
-  }
-
-  const blobPath = generateBlobPath(filename, user.uid);
-  const fileMetadata = {
-    originalName: filename,
-    mimeType: mimeType || 'application/octet-stream',
-    sizeBytes: size,
-    uploadedBy: user.uid,
-    uploadedAt: new Date().toISOString(),
-  };
-
-  try {
-    const result = await handleUpload({
-      body: req.body as HandleUploadBody,
-      request: new Request('https://placeholder', {
-        method: req.method || 'POST',
-        headers: req.headers as Record<string, string>,
-      }),
-      onBeforeGenerateToken: async (pathname, _clientPayload, _multipart) => {
-        if (!pathname.startsWith('supplier-quotes/')) {
-          throw new Error('INVALID_PATH: 文件路径必须以 supplier-quotes/ 开头');
-        }
-        return {
-          allowedContentTypes: [...ALLOWED_MIME_TYPES],
-          maximumSizeInBytes: MAX_FILE_SIZE,
-          tokenPayload: JSON.stringify(fileMetadata),
-        };
-      },
-      onUploadCompleted: async (uploadResult) => {
-        console.log('Upload completed:', uploadResult);
-      },
-    });
-
-    if (result.type !== 'blob.generate-client-token') {
-      return res.status(200).json({ success: true, data: { status: 'completed' } });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        clientToken: result.clientToken,
-        blobPath,
-        metadata: fileMetadata,
-      },
-    });
-  } catch (error) {
-    console.error('Upload token error:', error);
-    return res.status(500).json({
-      success: false,
-      code: 'UPLOAD_TOKEN_ERROR',
-      message: error instanceof Error ? error.message : '生成上传令牌失败',
-    });
-  }
+  const result = await handleUpload({
+    token: process.env.BLOB_READ_WRITE_TOKEN,
+    request: req,
+    body: req.body as HandleUploadBody,
+    onBeforeGenerateToken: async (pathname) => {
+      if (!pathname.startsWith('supplier-quotes/')) {
+        throw new Error('非法报价文件路径。');
+      }
+      return {
+        access: 'private',
+        allowedContentTypes: ALLOWED_CONTENT_TYPES,
+        maximumSizeInBytes: MAX_FILE_BYTES,
+        addRandomSuffix: true,
+      };
+    },
+    onUploadCompleted: async () => undefined,
+  });
+  return res.status(200).json(result);
 }
 
-export async function handleQuotationFileDownload(
-  req: ApiRequest,
-  res: ApiResponse,
-  blobPath: string,
-): Promise<unknown> {
-  let user;
-  try {
-    user = requireBuyerSession({ headers: req.headers }, process.env.SESSION_SECRET || 'test-secret');
-  } catch {
-    return res.status(401).json({ success: false, code: 'UNAUTHORIZED', message: '请先登录。' });
+export async function handleQuotationFileRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    return res.status(405).json({ success: false, code: 'METHOD_NOT_ALLOWED', message: 'Only GET is supported.' });
   }
-
-  if (!blobPath) {
-    return res.status(400).json({ success: false, code: 'INVALID_PATH', message: '缺少文件路径。' });
+  if (!authorize(req, res)) return undefined;
+  const pathname = typeof req.query?.pathname === 'string' ? req.query.pathname : '';
+  if (!pathname.startsWith('supplier-quotes/')) {
+    return res.status(400).json({ success: false, code: 'INVALID_PATH', message: '文件路径无效。' });
   }
-
-  // Sanitize path to prevent traversal
-  const normalizedPath = blobPath.replace(/\.\./g, '').replace(/^\/+/, '');
-  if (!normalizedPath.startsWith('supplier-quotes/')) {
-    return res.status(400).json({ success: false, code: 'INVALID_PATH', message: '无效的文件路径。' });
+  const result = await get(pathname, { access: 'private', useCache: false });
+  if (!result || result.statusCode !== 200) {
+    return res.status(404).json({ success: false, code: 'FILE_NOT_FOUND', message: '报价原文件不存在。' });
   }
-
-  try {
-    const headResult = await head(normalizedPath);
-    const url = headResult.url;
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      return res.status(404).json({ success: false, code: 'FILE_NOT_FOUND', message: '文件不存在或已过期。' });
-    }
-
-    const contentType = response.headers.get('content-type') || 'application/octet-stream';
-    const contentLength = response.headers.get('content-length');
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'private, max-age=3600');
-    if (contentLength) {
-      res.setHeader('Content-Length', contentLength);
-    }
-
-    const body = await response.arrayBuffer();
-    return res.status(200).send(Buffer.from(body));
-  } catch (error) {
-    console.error('File download error:', error);
-    return res.status(500).json({
-      success: false,
-      code: 'DOWNLOAD_ERROR',
-      message: error instanceof Error ? error.message : '文件下载失败',
-    });
-  }
+  const bytes = Buffer.from(await new Response(result.stream).arrayBuffer());
+  res.setHeader('Content-Type', result.blob.contentType);
+  const fileName = result.blob.pathname.split('/').pop() ?? 'quotation-file';
+  res.setHeader('Content-Disposition', getQuotationFileDisposition(result.blob.contentType, fileName));
+  res.setHeader('Cache-Control', 'private, no-store');
+  return res.status(200).send(bytes);
 }

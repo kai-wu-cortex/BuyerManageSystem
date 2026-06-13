@@ -1,12 +1,11 @@
-import { handleQuotationFileDownload } from '../../../src/server/quotationFileApi.ts';
+import { handleQuotationFileRequest } from '../../../src/server/quotationFileApi.ts';
 
 export default async function handler(
-  req: Parameters<typeof handleQuotationFileDownload>[0],
-  res: Parameters<typeof handleQuotationFileDownload>[1],
+  req: Parameters<typeof handleQuotationFileRequest>[0],
+  res: Parameters<typeof handleQuotationFileRequest>[1],
 ) {
-  const { id } = (req.params || {}) as { id?: string };
   try {
-    return await handleQuotationFileDownload(req, res, id || '');
+    return await handleQuotationFileRequest(req, res);
   } catch (error) {
     console.error('Quotation file download error:', error);
     return res.status(500).json({

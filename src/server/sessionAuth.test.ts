@@ -50,7 +50,7 @@ describe('createSessionToken / verifySessionToken', () => {
 
 describe('readSessionFromRequest', () => {
   it('returns user from valid session cookie', () => {
-    const token = createSessionToken(makeUser(), SECRET, FIXED_TIME);
+    const token = createSessionToken(makeUser(), SECRET);
     const cookie = createSessionCookie(token);
     const sessionValue = cookie.split(';')[0]!.split('=').slice(1).join('=');
     const req = { headers: { cookie: `buyer_session=${sessionValue}` } };
@@ -69,7 +69,7 @@ describe('readSessionFromRequest', () => {
 
 describe('requireBuyerSession', () => {
   it('returns buyer user', () => {
-    const token = createSessionToken(makeUser(), SECRET, FIXED_TIME);
+    const token = createSessionToken(makeUser(), SECRET);
     const cookie = createSessionCookie(token);
     const sessionValue = cookie.split(';')[0]!.split('=').slice(1).join('=');
     const req = { headers: { cookie: `buyer_session=${sessionValue}` } };
@@ -85,7 +85,7 @@ describe('requireBuyerSession', () => {
 
   it('throws FORBIDDEN for finance role', () => {
     const financeUser = { uid: 'caiwu', username: 'caiwu', role: 'caiwu' as const };
-    const token = createSessionToken(financeUser, SECRET, FIXED_TIME);
+    const token = createSessionToken(financeUser, SECRET);
     const cookie = createSessionCookie(token);
     const sessionValue = cookie.split(';')[0]!.split('=').slice(1).join('=');
     const req = { headers: { cookie: `buyer_session=${sessionValue}` } };

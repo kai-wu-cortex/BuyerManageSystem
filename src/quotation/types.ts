@@ -1,162 +1,154 @@
 export type QuotationWorkflowStatus = 'parsing' | 'review_required' | 'active' | 'voided';
+export type QuotationDisplayStatus = QuotationWorkflowStatus | 'expired';
 export type ParseJobStatus = 'queued' | 'processing' | 'review_required' | 'failed' | 'completed';
 export type PriceTaxMode = 'tax_included' | 'tax_excluded';
 export type GroupMatchStatus = 'unmatched' | 'suggested' | 'confirmed';
+export type ProductGroupStatus = 'suggested' | 'confirmed';
 
 export interface SourceFileRef {
-  blobPath: string;
-  originalName: string;
+  id: string;
+  pathname: string;
+  fileName: string;
   mimeType: string;
-  sizeBytes: number;
-  uploadedAt: string;
+  size: number;
+  checksum: string;
+}
+
+export interface FieldConfidence {
+  [field: string]: number;
+}
+
+export interface ReviewIssue {
+  field: string;
+  message: string;
+  blocking: boolean;
 }
 
 export interface NormalizationDetails {
-  sourceUnitPrice: number;
   currency: string;
   exchangeRateToCny: number;
   priceTaxMode: PriceTaxMode;
   taxRate: number;
-  sourcePackageQuantity: number;
   sourceUnit: string;
+  sourcePackageQuantity: number;
   normalizedUnit: string;
-  cnyUnitPrice: number;
-}
-
-export interface FieldConfidence {
-  field: string;
-  value: string;
-  confidence: number;
-  source: 'excel' | 'gemini' | 'manual';
-}
-
-export interface ReviewIssue {
-  id: string;
-  field: string;
-  severity: 'error' | 'warning';
-  message: string;
-  resolved: boolean;
+  formula: string;
 }
 
 export interface SupplierProfile {
   id: string;
+  name: string;
   normalizedName: string;
-  aliases: string[];
-  scores: {
-    quality: number;
-    delivery: number;
-    price: number;
-    service: number;
-  };
-  scoreNotes: string;
+  contactName: string;
+  contactPhone: string;
+  contactEmail: string;
+  qualityScore: number | null;
+  deliveryScore: number | null;
+  serviceScore: number | null;
+  cooperationScore: number | null;
+  scoreNote: string;
+  scoreUpdatedAt: string | null;
+  createdAt: string;
   updatedAt: string;
-}
-
-export interface SupplierQuotationItem {
-  id: string;
-  productCode: string;
-  productName: string;
-  productSpec: string;
-  sourceUnitPrice: number;
-  currency: string;
-  exchangeRateToCny: number;
-  priceTaxMode: PriceTaxMode;
-  taxRate: number;
-  sourcePackageQuantity: number;
-  sourceUnit: string;
-  normalizedUnit: string;
-  cnyUnitPrice: number;
-  moq: number;
-  leadTimeDays: number;
-  paymentTerms: string;
-  validUntil: string | null;
-  notes: string;
-  productGroupId: string | null;
-  groupMatchStatus: GroupMatchStatus;
-  normalization: NormalizationDetails;
+  deletedAt: string | null;
 }
 
 export interface SupplierQuotation {
   id: string;
-  version: number;
   supplierId: string;
-  supplierName: string;
-  status: QuotationWorkflowStatus;
+  quotationNumber: string;
   quotationDate: string;
+  validUntil: string | null;
+  currency: string;
+  exchangeRateToCny: number;
+  taxRate: number;
+  priceTaxMode: PriceTaxMode;
+  paymentTerms: string;
+  leadTimeDays: number | null;
+  status: QuotationWorkflowStatus;
   sourceFile: SourceFileRef;
-  items: SupplierQuotationItem[];
-  reviewIssues: ReviewIssue[];
   parseJobId: string | null;
-  confirmedAt: string | null;
+  version: number;
   confirmedBy: string | null;
+  confirmedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface SupplierQuotationItem {
+  id: string;
+  quotationId: string;
+  lineNumber: number;
+  sourceProductCode: string;
+  sourceProductName: string;
+  sourceSpecification: string;
+  sourceUnit: string;
+  sourcePackageDescription: string;
+  sourcePackageQuantity: number | null;
+  sourceUnitPrice: number | null;
+  minimumOrderQuantity: number | null;
+  lineLeadTimeDays: number | null;
+  productGroupId: string | null;
+  groupMatchStatus: GroupMatchStatus;
+  normalizedQuantity: number | null;
+  normalizedUnit: string | null;
+  normalizedTaxIncludedCnyPrice: number | null;
+  normalizationDetails: NormalizationDetails | null;
+  fieldConfidence: FieldConfidence;
+  reviewIssues: ReviewIssue[];
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
 }
 
 export interface SupplierProductGroup {
   id: string;
-  name: string;
+  standardName: string;
+  standardSpecification: string;
+  baseUnit: string;
+  conversionRules: Record<string, number>;
   aliases: string[];
-  conversions: { from: string; to: string; factor: number }[];
-  confirmed: boolean;
+  status: ProductGroupStatus;
+  confirmedBy: string | null;
+  confirmedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  deletedAt: string | null;
 }
 
 export interface SupplierQuoteParseJob {
   id: string;
   quotationId: string;
+  fileId: string;
+  fileType: string;
   status: ParseJobStatus;
   attemptCount: number;
-  maxAttempts: number;
   parserVersion: string;
-  result: {
-    items: Omit<SupplierQuotationItem, 'id' | 'normalization'>[];
-    issues: ReviewIssue[];
-    confidence: FieldConfidence[];
-  } | null;
+  rawStructuredResult: unknown;
+  validationIssues: ReviewIssue[];
   errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface QuotationDraft {
-  supplierName: string;
-  quotationDate: string;
-  currency: string;
-  exchangeRateToCny: number;
-  priceTaxMode: PriceTaxMode;
-  taxRate: number;
-  sourceFile: SourceFileRef;
-  items: Omit<SupplierQuotationItem, 'id' | 'normalization'>[];
+  quotation: SupplierQuotation;
+  items: SupplierQuotationItem[];
 }
 
 export interface ComparisonColumn {
-  quotationId: string;
-  quotationItemId: string;
-  supplierName: string;
-  version: number;
-  sourceUnitPrice: number;
-  currency: string;
-  cnyUnitPrice: number;
-  moq: number;
-  leadTimeDays: number;
-  paymentTerms: string;
-  validUntil: string | null;
-  normalizedUnit: string;
-  normalization: NormalizationDetails;
-  scores: SupplierProfile['scores'];
+  quotation: SupplierQuotation;
+  item: SupplierQuotationItem;
+  supplier: SupplierProfile;
 }
 
 export interface ComparisonResult {
-  productGroupId: string;
-  productName: string;
+  productGroup: SupplierProductGroup;
   columns: ComparisonColumn[];
-  highlights: {
-    minPriceItemId: string | null;
-    minLeadTimeItemId: string | null;
-    bestScoreItemId: string | null;
-  };
 }
 
 export interface NormalizePriceInput {

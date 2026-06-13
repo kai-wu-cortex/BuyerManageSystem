@@ -1,79 +1,81 @@
+import {
+  cloudbaseCollections,
+  listDocuments,
+  setDocument,
+} from '../lib/cloudbaseData';
 import type {
-  SupplierQuotation,
   QuotationDraft,
-  SourceFileRef,
+  SupplierProductGroup,
+  SupplierProfile,
+  SupplierQuotation,
+  SupplierQuotationItem,
 } from './types';
+import type { ParsedQuotationValidation } from './quotationParser';
 
-const API_BASE = '/api';
-
-async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    credentials: 'same-origin',
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  });
-
-  const data = await response.json();
-  if (!response.ok || data.success === false) {
-    throw new Error(data.message || `请求失败: ${response.status}`);
-  }
-  return data.data;
+export interface QuotationWorkspace {
+  quotations: SupplierQuotation[];
+  items: SupplierQuotationItem[];
+  suppliers: SupplierProfile[];
+  productGroups: SupplierProductGroup[];
 }
 
-export async function listQuotations(filters?: {
-  status?: string;
-  searchTerm?: string;
-}): Promise<SupplierQuotation[]> {
-  const params = new URLSearchParams();
-  if (filters?.status && filters.status !== 'all') {
-    params.set('status', filters.status);
-  }
-  if (filters?.searchTerm) {
-    params.set('search', filters.searchTerm);
-  }
-  const query = params.toString();
-  return requestJson<SupplierQuotation[]>(`/quotation${query ? `?${query}` : ''}`);
+export async function loadQuotationWorkspace(): Promise<QuotationWorkspace> {
+  const [quotations, items, suppliers, productGroups] = await Promise.all([
+    listDocuments<SupplierQuotation>(cloudbaseCollections.supplierQuotations),
+    listDocuments<SupplierQuotationItem>(cloudbaseCollections.supplierQuotationItems),
+    listDocuments<SupplierProfile>(cloudbaseCollections.supplierProfiles),
+    listDocuments<SupplierProductGroup>(cloudbaseCollections.supplierProductGroups),
+  ]);
+  return { quotations, items, suppliers, productGroups };
 }
 
-export async function getQuotation(id: string): Promise<SupplierQuotation> {
-  return requestJson<SupplierQuotation>(`/quotation/${id}`);
+export async function saveQuotationDraft(draft: QuotationDraft): Promise<void> {
+  await Promise.all([
+    setDocument(cloudbaseCollections.supplierQuotations, draft.quotation.id, draft.quotation),
+    ...draft.items.map(item => setDocument(cloudbaseCollections.supplierQuotationItems, item.id, item)),
+  ]);
 }
 
-export async function createQuotationDraft(draft: QuotationDraft): Promise<SupplierQuotation> {
-  return requestJson<SupplierQuotation>('/quotation', {
+export async function confirmQuotationDraft(draft: QuotationDraft): Promise<QuotationDraft> {
+  const response = await fetch('/api/quotation/confirm', {
     method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(draft),
   });
+  const payload = await response.json() as { success?: boolean; data?: QuotationDraft; message?: string };
+  if (!response.ok || !payload.success || !payload.data) {
+    throw new Error(payload.message ?? '报价确认失败。');
+  }
+  return payload.data;
 }
 
-export async function uploadQuotationFile(file: File): Promise<{
-  clientToken: string;
-  blobPath: string;
-  metadata: SourceFileRef;
-}> {
-  const response = await fetch(`${API_BASE}/quotation/files/upload`, {
+export async function saveSupplierProfile(profile: SupplierProfile): Promise<void> {
+  await setDocument(cloudbaseCollections.supplierProfiles, profile.id, profile);
+}
+
+export async function saveProductGroup(group: SupplierProductGroup): Promise<void> {
+  await setDocument(cloudbaseCollections.supplierProductGroups, group.id, group);
+}
+
+export async function saveQuotationItem(item: SupplierQuotationItem): Promise<void> {
+  await setDocument(cloudbaseCollections.supplierQuotationItems, item.id, item);
+}
+
+export async function parseQuotationFile(pathname: string, mimeType: string): Promise<ParsedQuotationValidation> {
+  const response = await fetch('/api/quotation/parse', {
     method: 'POST',
     credentials: 'same-origin',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      filename: file.name,
-      mimeType: file.type,
-      size: file.size,
-    }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pathname, mimeType }),
   });
-
-  const data = await response.json();
-  if (!response.ok || data.success === false) {
-    throw new Error(data.message || '上传失败');
+  const payload = await response.json() as {
+    success?: boolean;
+    data?: ParsedQuotationValidation;
+    message?: string;
+  };
+  if (!response.ok || !payload.success || !payload.data) {
+    throw new Error(payload.message ?? '报价单解析失败。');
   }
-  return data.data;
-}
-
-export async function getFileDownloadUrl(blobPath: string): Promise<string> {
-  return `${API_BASE}/quotation/files/${encodeURIComponent(blobPath)}`;
+  return payload.data;
 }

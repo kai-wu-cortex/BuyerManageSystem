@@ -7,7 +7,9 @@ import { parseSampleWithGemini } from "./src/lib/geminiSampleParser";
 import { handleMongoCollectionRequest, handleMongoDocumentRequest } from "./src/server/mongoDataApi";
 import { handleLoginRequest } from "./src/server/loginApi";
 import { handleLogoutRequest } from "./src/server/logoutApi";
-import { handleQuotationUploadToken, handleQuotationFileDownload } from "./src/server/quotationFileApi";
+import { handleQuotationFileRequest, handleQuotationUploadRequest } from "./src/server/quotationFileApi";
+import { handleQuotationParseRequest } from "./src/server/quotationParseApi";
+import { handleQuotationConfirmRequest } from "./src/server/quotationConfirmApi";
 import { getMongoDb } from "./src/lib/mongodb";
 
 dotenv.config({ path: ".env.local" });
@@ -86,11 +88,17 @@ app.post("/api/logout", async (req, res) => {
 });
 
 // Quotation file upload and download
-app.post("/api/quotation/files/upload", async (req, res) => {
-  await handleQuotationUploadToken(req, res);
+app.post("/api/quotation/upload", async (req, res) => {
+  await handleQuotationUploadRequest(req, res);
 });
-app.get("/api/quotation/files/:id", async (req, res) => {
-  await handleQuotationFileDownload(req, res, req.params.id || '');
+app.get("/api/quotation/file", async (req, res) => {
+  await handleQuotationFileRequest(req, res);
+});
+app.post("/api/quotation/parse", async (req, res) => {
+  await handleQuotationParseRequest(req, res);
+});
+app.post("/api/quotation/confirm", async (req, res) => {
+  await handleQuotationConfirmRequest(req, res);
 });
 
 async function startServer() {
