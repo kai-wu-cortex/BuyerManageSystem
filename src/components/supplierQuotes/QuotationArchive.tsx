@@ -289,11 +289,11 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         {loading ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16"><Loader2 className="h-6 w-6 animate-spin text-blue-500" /><p className="text-xs text-slate-500">加载中...</p></div>
         ) : (
-          <table className="w-full">
+          <table className="min-w-[800px] w-full">
             <thead><tr className="border-b border-slate-200 bg-slate-50">
               {['报价单号', '供应商', '源文件', '日期', '版本', '状态', '操作'].map(label => <th key={label} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 last:text-right">{label}</th>)}
             </tr></thead>
