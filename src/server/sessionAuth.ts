@@ -17,13 +17,18 @@ interface SessionUser {
 }
 
 export class SessionAuthError extends Error {
+  readonly statusCode: number;
+  readonly code: 'UNAUTHORIZED' | 'FORBIDDEN';
+
   constructor(
-    public readonly statusCode: number,
-    public readonly code: 'UNAUTHORIZED' | 'FORBIDDEN',
+    statusCode: number,
+    code: 'UNAUTHORIZED' | 'FORBIDDEN',
     message: string,
   ) {
     super(message);
     this.name = 'SessionAuthError';
+    this.statusCode = statusCode;
+    this.code = code;
   }
 }
 
