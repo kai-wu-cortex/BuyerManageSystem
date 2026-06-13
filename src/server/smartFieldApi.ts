@@ -5,7 +5,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 type ApiRequest = IncomingMessage & {
   method?: string;
-  body?: { pathname?: unknown; mimeType?: unknown; prompt?: unknown; itemCount?: unknown };
+  body?: { pathname?: unknown; mimeType?: unknown; prompt?: unknown; itemCount?: unknown; productNames?: unknown };
 };
 type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
 
@@ -39,6 +39,7 @@ export async function handleSmartFieldExtractRequest(req: ApiRequest, res: ApiRe
   const mimeType = typeof req.body?.mimeType === 'string' ? req.body.mimeType : '';
   const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
   const itemCount = typeof req.body?.itemCount === 'number' ? req.body.itemCount : 0;
+  const productNames = Array.isArray(req.body?.productNames) ? req.body.productNames.filter((n): n is string => typeof n === 'string') : [];
 
   if (!pathname.startsWith('supplier-quotes/')) {
     return sendError(res, 400, 'INVALID_FILE', '无效的文件路径。');
@@ -59,6 +60,10 @@ export async function handleSmartFieldExtractRequest(req: ApiRequest, res: ApiRe
     const isExcel = mimeType.includes('spreadsheet') || mimeType.includes('ms-excel');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+    const productList = productNames.length > 0
+      ? `\n\n已知产品列表（按顺序）：\n${productNames.map((name, i) => `${i + 1}. ${name}`).join('\n')}`
+      : '';
+
     const instruction = `你是一个数据提取引擎。根据用户提供的提示词，从报价单中提取每个产品的对应数据。
 
 规则：
@@ -66,6 +71,7 @@ export async function handleSmartFieldExtractRequest(req: ApiRequest, res: ApiRe
 - 每个元素是一个字符串，代表该产品对应的提取结果
 - 如果某个产品无法提取到对应数据，返回空字符串""
 - 不要猜测，只提取文件中明确存在的信息
+- 提取的数据必须与对应的产品名称匹配${productList}
 
 用户提示词：${prompt}`;
 

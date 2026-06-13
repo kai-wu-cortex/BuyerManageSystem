@@ -4,6 +4,7 @@ import {
   Building2,
   ChevronLeft,
   ChevronRight,
+  Eye,
   FileSpreadsheet,
   FileText,
   Image,
@@ -151,6 +152,7 @@ function PreviewPanel({
   const [editSummary, setEditSummary] = useState(quotation.summary ?? '');
   const [customColumns, setCustomColumns] = useState<Record<string, string[]>>(quotation.smartFields ?? {});
   const [smartPrompt, setSmartPrompt] = useState('');
+  const [smartColName, setSmartColName] = useState('');
   const [smartLoading, setSmartLoading] = useState(false);
   const [smartError, setSmartError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -195,15 +197,17 @@ function PreviewPanel({
           mimeType: quotation.sourceFile.mimeType,
           prompt: smartPrompt.trim(),
           itemCount: items.length,
+          productNames: items.map(i => i.sourceProductName),
         }),
       });
       const payload = await res.json() as { success?: boolean; data?: { values: string[] }; message?: string };
       if (!res.ok || !payload.success || !payload.data) {
         throw new Error(payload.message ?? '智能字段提取失败。');
       }
-      const colName = smartPrompt.trim().slice(0, 20);
+      const colName = smartColName.trim() || smartPrompt.trim().slice(0, 20);
       setCustomColumns(prev => ({ ...prev, [colName]: payload.data!.values }));
       setSmartPrompt('');
+      setSmartColName('');
     } catch (err) {
       setSmartError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -306,23 +310,33 @@ function PreviewPanel({
           </div>
 
           {/* Smart field input */}
-          <div className="mb-3 flex items-start gap-2">
-            <input
-              value={smartPrompt}
-              onChange={e => setSmartPrompt(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !smartLoading) void handleSmartExtract(); }}
-              placeholder="输入提示词提取智能字段（如：提取每个产品的交货周期、最小起订量、包装方式...）"
-              className="flex-1 rounded-lg border border-purple-200 px-3 py-2 text-xs outline-none focus:border-purple-400"
-              disabled={smartLoading}
-            />
-            <button
-              type="button"
-              disabled={smartLoading || !smartPrompt.trim()}
-              onClick={() => void handleSmartExtract()}
-              className="flex shrink-0 items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
-            >
-              {smartLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} 提取
-            </button>
+          <div className="mb-3 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <input
+                value={smartColName}
+                onChange={e => setSmartColName(e.target.value)}
+                placeholder="列名（如：交货周期）"
+                className="w-36 rounded-lg border border-purple-200 px-3 py-2 text-xs outline-none focus:border-purple-400"
+                disabled={smartLoading}
+              />
+              <input
+                value={smartPrompt}
+                onChange={e => setSmartPrompt(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !smartLoading) void handleSmartExtract(); }}
+                placeholder="输入提示词提取智能字段（如：提取每个产品的交货周期、最小起订量、包装方式...）"
+                className="flex-1 rounded-lg border border-purple-200 px-3 py-2 text-xs outline-none focus:border-purple-400"
+                disabled={smartLoading}
+              />
+              <button
+                type="button"
+                disabled={smartLoading || !smartPrompt.trim()}
+                onClick={() => void handleSmartExtract()}
+                className="flex shrink-0 items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+              >
+                {smartLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} 提取
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-400">输入列名和提示词，Gemini 会从原始报价单中提取每个产品对应的数据</p>
           </div>
           {smartError && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{smartError}</div>}
           <div className="overflow-auto rounded-lg border border-slate-200">
@@ -565,9 +579,12 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
                     <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusColor(displayStatus)}`}>{getStatusLabel(displayStatus)}</span></td>
                     <td className="px-4 py-3 max-w-[200px]"><p className="truncate text-xs text-slate-500">{quotation.summary || '-'}</p></td>
                     <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
-                      <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
-                        {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <a href={`/api/quotation/file?pathname=${encodeURIComponent(quotation.sourceFile.pathname)}`} target="_blank" rel="noreferrer" className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></a>
+                        <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                          {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
