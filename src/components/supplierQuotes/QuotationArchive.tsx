@@ -8,8 +8,10 @@ import {
   FileText,
   Image,
   Loader2,
+  Plus,
   Save,
   Search,
+  Sparkles,
   Trash2,
   Upload,
   X,
@@ -147,6 +149,10 @@ function PreviewPanel({
   const [editTaxRate, setEditTaxRate] = useState(quotation.taxRate);
   const [editStatus, setEditStatus] = useState(quotation.status);
   const [editSummary, setEditSummary] = useState(quotation.summary ?? '');
+  const [customColumns, setCustomColumns] = useState<Record<string, string[]>>(quotation.smartFields ?? {});
+  const [smartPrompt, setSmartPrompt] = useState('');
+  const [smartLoading, setSmartLoading] = useState(false);
+  const [smartError, setSmartError] = useState('');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const isExcel = quotation.sourceFile.mimeType.includes('spreadsheet') || quotation.sourceFile.mimeType === 'application/vnd.ms-excel';
@@ -163,6 +169,7 @@ function PreviewPanel({
         taxRate: editTaxRate,
         status: editStatus,
         summary: editSummary,
+        smartFields: customColumns,
         updatedAt: now,
       });
       setMessage('已保存');
@@ -173,6 +180,46 @@ function PreviewPanel({
       setSaving(false);
     }
   };
+
+  const handleSmartExtract = async () => {
+    if (!smartPrompt.trim()) return;
+    setSmartLoading(true);
+    setSmartError('');
+    try {
+      const res = await fetch('/api/quotation/smart-field', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pathname: quotation.sourceFile.pathname,
+          mimeType: quotation.sourceFile.mimeType,
+          prompt: smartPrompt.trim(),
+          itemCount: items.length,
+        }),
+      });
+      const payload = await res.json() as { success?: boolean; data?: { values: string[] }; message?: string };
+      if (!res.ok || !payload.success || !payload.data) {
+        throw new Error(payload.message ?? '智能字段提取失败。');
+      }
+      const colName = smartPrompt.trim().slice(0, 20);
+      setCustomColumns(prev => ({ ...prev, [colName]: payload.data!.values }));
+      setSmartPrompt('');
+    } catch (err) {
+      setSmartError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSmartLoading(false);
+    }
+  };
+
+  const removeSmartColumn = (colName: string) => {
+    setCustomColumns(prev => {
+      const next = { ...prev };
+      delete next[colName];
+      return next;
+    });
+  };
+
+  const customColNames = Object.keys(customColumns);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/60 lg:flex-row">
@@ -244,7 +291,40 @@ function PreviewPanel({
           </div>
 
           {/* Items table */}
-          <div className="mb-3 text-xs font-semibold text-slate-700">产品明细 ({items.length} 项)</div>
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-xs font-semibold text-slate-700">产品明细 ({items.length} 项)</div>
+            {customColNames.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {customColNames.map(name => (
+                  <span key={name} className="flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700">
+                    <Sparkles className="h-2.5 w-2.5" />{name}
+                    <button type="button" onClick={() => removeSmartColumn(name)} className="ml-0.5 text-purple-400 hover:text-purple-600">&times;</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Smart field input */}
+          <div className="mb-3 flex items-start gap-2">
+            <input
+              value={smartPrompt}
+              onChange={e => setSmartPrompt(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !smartLoading) void handleSmartExtract(); }}
+              placeholder="输入提示词提取智能字段（如：提取每个产品的交货周期、最小起订量、包装方式...）"
+              className="flex-1 rounded-lg border border-purple-200 px-3 py-2 text-xs outline-none focus:border-purple-400"
+              disabled={smartLoading}
+            />
+            <button
+              type="button"
+              disabled={smartLoading || !smartPrompt.trim()}
+              onClick={() => void handleSmartExtract()}
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+            >
+              {smartLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} 提取
+            </button>
+          </div>
+          {smartError && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{smartError}</div>}
           <div className="overflow-auto rounded-lg border border-slate-200">
             <table className="min-w-[600px] w-full text-xs">
               <thead><tr className="border-b border-slate-200 bg-slate-50">
@@ -254,6 +334,7 @@ function PreviewPanel({
                 <th className="px-3 py-2 text-left font-semibold text-slate-500">单位</th>
                 <th className="px-3 py-2 text-left font-semibold text-slate-500">包装数</th>
                 <th className="px-3 py-2 text-left font-semibold text-slate-500">单价</th>
+                {customColNames.map(name => <th key={name} className="px-3 py-2 text-left font-semibold text-purple-600">{name}</th>)}
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {items.map((item, index) => (
@@ -264,6 +345,7 @@ function PreviewPanel({
                     <td className="px-3 py-2 text-slate-700">{item.sourceUnit || '-'}</td>
                     <td className="px-3 py-2 text-slate-700">{item.sourcePackageQuantity ?? '-'}</td>
                     <td className="px-3 py-2 text-slate-700">{item.sourceUnitPrice ?? '-'}</td>
+                    {customColNames.map(name => <td key={name} className="px-3 py-2 text-purple-700">{customColumns[name]?.[index] || '-'}</td>)}
                   </tr>
                 ))}
               </tbody>

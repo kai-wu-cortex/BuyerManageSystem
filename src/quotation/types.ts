@@ -71,6 +71,7 @@ export interface SupplierQuotation {
   confirmedBy: string | null;
   confirmedAt: string | null;
   summary?: string;
+  smartFields?: Record<string, string[]>;
   customColumns?: CustomColumn[];
   createdAt: string;
   updatedAt: string;

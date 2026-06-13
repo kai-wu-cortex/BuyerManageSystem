@@ -10,6 +10,7 @@ import { handleLogoutRequest } from "./src/server/logoutApi";
 import { handleQuotationFileRequest, handleQuotationUploadRequest } from "./src/server/quotationFileApi";
 import { handleQuotationParseRequest } from "./src/server/quotationParseApi";
 import { handleQuotationConfirmRequest } from "./src/server/quotationConfirmApi";
+import { handleSmartFieldExtractRequest } from "./src/server/smartFieldApi";
 import { getMongoDb } from "./src/lib/mongodb";
 
 dotenv.config({ path: ".env.local" });
@@ -102,6 +103,9 @@ if (!shouldProxyDataApi) {
   });
   app.post("/api/quotation/confirm", async (req, res) => {
     await handleQuotationConfirmRequest(req, res);
+  });
+  app.post("/api/quotation/smart-field", async (req, res) => {
+    await handleSmartFieldExtractRequest(req, res);
   });
 }
 
