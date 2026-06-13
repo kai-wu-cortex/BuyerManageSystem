@@ -67,6 +67,11 @@ export async function deleteQuotation(quotationId: string, items: SupplierQuotat
   );
 }
 
+export async function deleteSupplier(supplierId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await setDocument(cloudbaseCollections.supplierProfiles, supplierId, { deletedAt: now, updatedAt: now });
+}
+
 export async function parseQuotationFile(pathname: string, mimeType: string, customPrompt?: string): Promise<ParsedQuotationValidation> {
   const response = await fetch('/api/quotation/parse', {
     method: 'POST',

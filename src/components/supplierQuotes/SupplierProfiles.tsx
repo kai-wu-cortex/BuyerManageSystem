@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Building2, Eye, Mail, Phone, Save, Star, TrendingUp, User } from 'lucide-react';
-import { saveSupplierProfile } from '../../quotation/api';
+import { Building2, Eye, Mail, Phone, Save, Star, Trash2, TrendingUp, User } from 'lucide-react';
+import { deleteSupplier, saveSupplierProfile } from '../../quotation/api';
 import { deriveQuotationDisplayStatus } from '../../quotation/normalization';
 import type { SupplierProfile, SupplierQuotation, SupplierQuotationItem } from '../../quotation/types';
 import { formatDate, getScoreColor, getStatusColor, getStatusLabel } from './quotationUi';
@@ -49,10 +49,29 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
     }
   };
 
+  const handleDelete = async (supplierId: string) => {
+    if (!window.confirm('确定要删除这个供应商吗？')) return;
+    try {
+      await deleteSupplier(supplierId);
+      if (selectedId === supplierId) {
+        const next = suppliers.find(s => s.id !== supplierId);
+        setSelectedId(next?.id ?? '');
+      }
+      await onSaved();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   return (
     <div className="p-6">
       <div className="mb-4 flex flex-wrap gap-2">
-        {suppliers.map(supplier => <button key={supplier.id} type="button" onClick={() => setSelectedId(supplier.id)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${supplier.id === draft.id ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}>{supplier.name}</button>)}
+        {suppliers.map(supplier => (
+          <div key={supplier.id} className="flex items-center gap-1">
+            <button type="button" onClick={() => setSelectedId(supplier.id)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${supplier.id === draft.id ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}>{supplier.name}</button>
+            <button type="button" onClick={() => void handleDelete(supplier.id)} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
+          </div>
+        ))}
       </div>
 
       <div className="mb-6 rounded-xl border border-slate-200 bg-white p-6">

@@ -145,6 +145,7 @@ function PreviewPanel({
   const [editNumber, setEditNumber] = useState(quotation.quotationNumber);
   const [editCurrency, setEditCurrency] = useState(quotation.currency);
   const [editTaxRate, setEditTaxRate] = useState(quotation.taxRate);
+  const [editStatus, setEditStatus] = useState(quotation.status);
   const [editSummary, setEditSummary] = useState(quotation.summary ?? '');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -160,6 +161,7 @@ function PreviewPanel({
         quotationNumber: editNumber,
         currency: editCurrency.toUpperCase(),
         taxRate: editTaxRate,
+        status: editStatus,
         summary: editSummary,
         updatedAt: now,
       });
@@ -227,7 +229,14 @@ function PreviewPanel({
               税率 %
               <input type="number" value={editTaxRate} onChange={e => setEditTaxRate(Number(e.target.value))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
             </label>
-            <div />
+            <label className="text-[11px] font-semibold text-slate-500">
+              状态
+              <select value={editStatus} onChange={e => setEditStatus(e.target.value as typeof editStatus)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <option value="review_required">待审核</option>
+                <option value="active">已生效</option>
+                <option value="voided">已作废</option>
+              </select>
+            </label>
             <label className="col-span-2 text-[11px] font-semibold text-slate-500">
               报价简述
               <textarea value={editSummary} onChange={e => setEditSummary(e.target.value)} rows={2} placeholder="添加备注或摘要..." className="mt-1.5 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400" />
@@ -313,7 +322,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [parseMode, setParseMode] = useState<'internal' | 'gemini'>('internal');
+  const [parseMode, setParseMode] = useState<'internal' | 'gemini' | 'display'>('internal');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [previewQuotationId, setPreviewQuotationId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -345,10 +354,16 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
       .filter(q => {
         if (!term) return true;
         const name = supplierMap.get(q.supplierId)?.name ?? '';
-        return `${q.quotationNumber} ${name} ${q.sourceFile.fileName} ${q.summary ?? ''}`.toLowerCase().includes(term);
+        if (`${q.quotationNumber} ${name} ${q.sourceFile.fileName} ${q.summary ?? ''}`.toLowerCase().includes(term)) return true;
+        const qItems = workspace.items.filter(i => i.quotationId === q.id && !i.deletedAt);
+        return qItems.some(i =>
+          i.sourceProductName.toLowerCase().includes(term) ||
+          i.sourceSpecification.toLowerCase().includes(term) ||
+          (i.sourceUnitPrice !== null && String(i.sourceUnitPrice).includes(term))
+        );
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [searchTerm, status, supplierMap, workspace.quotations]);
+  }, [searchTerm, status, supplierMap, workspace.quotations, workspace.items]);
 
   const previewQuotation = previewQuotationId
     ? workspace.quotations.find(q => q.id === previewQuotationId) ?? null
@@ -381,7 +396,9 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
 
       setUploadProgress('正在解析产品、价格和报价信息...');
       let validation;
-      if (ext === 'xlsx' || ext === 'xls') {
+      if (parseMode === 'display') {
+        validation = { valid: true, value: { supplierName: '', quotationNumber: '', quotationDate: new Date().toISOString().slice(0, 10), currency: 'CNY', exchangeRateToCny: 1, taxRate: 0, priceTaxMode: 'tax_included' as const, items: [] }, issues: [] };
+      } else if (ext === 'xlsx' || ext === 'xls') {
         if (parseMode === 'gemini') {
           validation = await parseQuotationFile(blob.pathname, file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         } else {
@@ -427,7 +444,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
             <Search className="h-4 w-4 text-slate-400" />
-            <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="搜索供应商、报价单号、文件名或简述..." className="w-72 rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-blue-400" />
+            <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="搜索供应商、报价单号、产品名称、价格..." className="w-80 rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-blue-400" />
           </div>
           <select value={status} onChange={e => setStatus(e.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none">
             <option value="all">全部状态</option>
@@ -488,10 +505,11 @@ export default function QuotationArchive({ workspace, loading, onRefresh }: Prop
               <button type="button" disabled={uploading} onClick={() => setShowUpload(false)}><X className="h-5 w-5 text-slate-400" /></button>
             </div>
             <div className="p-6">
-              <div className="mb-4 flex items-center gap-6">
+              <div className="mb-4 flex flex-wrap items-center gap-4">
                 <span className="text-xs font-semibold text-slate-500">解析模式:</span>
                 <label className="flex items-center gap-1.5 text-xs text-slate-700"><input type="radio" name="parseMode" checked={parseMode === 'internal'} onChange={() => setParseMode('internal')} disabled={uploading} className="accent-blue-600" />内部算法</label>
                 <label className="flex items-center gap-1.5 text-xs text-slate-700"><input type="radio" name="parseMode" checked={parseMode === 'gemini'} onChange={() => setParseMode('gemini')} disabled={uploading} className="accent-blue-600" />Gemini AI</label>
+                <label className="flex items-center gap-1.5 text-xs text-slate-700"><input type="radio" name="parseMode" checked={parseMode === 'display'} onChange={() => setParseMode('display')} disabled={uploading} className="accent-blue-600" />不解析</label>
               </div>
               <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.pdf,.png,.jpg,.jpeg,.webp" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) void handleFileUpload(f); }} />
               {uploading ? (
