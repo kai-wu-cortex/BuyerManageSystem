@@ -143,6 +143,8 @@ function PreviewPanel({
   onSaved: () => Promise<void>;
 }) {
   const [editNumber, setEditNumber] = useState(quotation.quotationNumber);
+  const [editCurrency, setEditCurrency] = useState(quotation.currency);
+  const [editTaxRate, setEditTaxRate] = useState(quotation.taxRate);
   const [editSummary, setEditSummary] = useState(quotation.summary ?? '');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -156,6 +158,8 @@ function PreviewPanel({
       await setDocument(cloudbaseCollections.supplierQuotations, quotation.id, {
         ...quotation,
         quotationNumber: editNumber,
+        currency: editCurrency.toUpperCase(),
+        taxRate: editTaxRate,
         summary: editSummary,
         updatedAt: now,
       });
@@ -169,17 +173,20 @@ function PreviewPanel({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex bg-slate-900/60">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/60 lg:flex-row">
       {/* Left: file preview */}
-      <div className="flex w-[45%] flex-col border-r border-slate-700 bg-white">
+      <div className="flex h-[40vh] flex-col border-b border-slate-700 bg-white lg:h-auto lg:w-[45%] lg:border-b-0 lg:border-r">
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
             {getFileIcon(quotation.sourceFile.mimeType)}
             <span className="truncate text-xs font-semibold text-slate-700">{quotation.sourceFile.fileName}</span>
           </div>
-          <a href={`/api/quotation/file?pathname=${encodeURIComponent(quotation.sourceFile.pathname)}`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-blue-600">新窗口打开</a>
+          <div className="flex items-center gap-2">
+            <a href={`/api/quotation/file?pathname=${encodeURIComponent(quotation.sourceFile.pathname)}`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-blue-600">新窗口</a>
+            <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="h-4 w-4" /></button>
+          </div>
         </div>
-        <div className="flex-1 overflow-hidden bg-slate-50 p-4">
+        <div className="flex-1 overflow-hidden bg-slate-50 p-2 lg:p-4">
           <div className="h-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             {isExcel ? (
               <ExcelPreview pathname={quotation.sourceFile.pathname} />
@@ -191,15 +198,15 @@ function PreviewPanel({
       </div>
 
       {/* Right: info + items */}
-      <div className="flex w-[55%] flex-col bg-white">
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+      <div className="flex flex-1 flex-col overflow-hidden bg-white">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 lg:px-6">
           <h3 className="text-sm font-bold text-slate-800">报价单详情</h3>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 lg:hidden"><X className="h-4 w-4" /></button>
         </div>
 
-        <div className="flex-1 overflow-auto px-6 py-4">
+        <div className="flex-1 overflow-auto px-4 py-4 lg:px-6">
           {/* Editable fields */}
-          <div className="mb-4 grid grid-cols-2 gap-4">
+          <div className="mb-4 grid grid-cols-2 gap-3 lg:gap-4">
             <label className="text-[11px] font-semibold text-slate-500">
               报价单号
               <input value={editNumber} onChange={e => setEditNumber(e.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
@@ -214,8 +221,13 @@ function PreviewPanel({
             </label>
             <label className="text-[11px] font-semibold text-slate-500">
               币种
-              <input value={quotation.currency} readOnly className="mt-1.5 w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-700" />
+              <input value={editCurrency} onChange={e => setEditCurrency(e.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm uppercase" />
             </label>
+            <label className="text-[11px] font-semibold text-slate-500">
+              税率 %
+              <input type="number" value={editTaxRate} onChange={e => setEditTaxRate(Number(e.target.value))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+            </label>
+            <div />
             <label className="col-span-2 text-[11px] font-semibold text-slate-500">
               报价简述
               <textarea value={editSummary} onChange={e => setEditSummary(e.target.value)} rows={2} placeholder="添加备注或摘要..." className="mt-1.5 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-400" />
