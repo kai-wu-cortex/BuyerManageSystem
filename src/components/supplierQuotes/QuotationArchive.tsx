@@ -8,12 +8,14 @@ import {
   Image,
   Loader2,
   Search,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
 import { deriveQuotationDisplayStatus } from '../../quotation/normalization';
 import { rowsToQuotationDraft, validateParsedQuotation } from '../../quotation/quotationParser';
 import {
+  deleteQuotation,
   parseQuotationFile,
   saveQuotationDraft,
   saveSupplierProfile,
@@ -132,7 +134,22 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
   const [uploadProgress, setUploadProgress] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [parseMode, setParseMode] = useState<'internal' | 'gemini'>('internal');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDelete = async (quotationId: string) => {
+    if (!window.confirm('确定要删除这份报价单吗？')) return;
+    setDeletingId(quotationId);
+    try {
+      const items = workspace.items.filter(item => item.quotationId === quotationId);
+      await deleteQuotation(quotationId, items);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const supplierMap = useMemo(
     () => new Map(workspace.suppliers.map(supplier => [supplier.id, supplier])),
@@ -291,7 +308,14 @@ export default function QuotationArchive({ workspace, loading, onRefresh, onSele
                     <td className="px-4 py-3 text-xs text-slate-600">{formatDate(quotation.quotationDate)}</td>
                     <td className="px-4 py-3 text-xs text-slate-600">V{quotation.version}</td>
                     <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusColor(displayStatus)}`}>{getStatusLabel(displayStatus)}</span></td>
-                    <td className="px-4 py-3 text-right"><button type="button" onClick={() => onSelectReview(quotation.id)} className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></button></td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button type="button" onClick={() => onSelectReview(quotation.id)} className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></button>
+                        <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                          {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}

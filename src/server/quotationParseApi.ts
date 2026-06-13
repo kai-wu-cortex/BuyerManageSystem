@@ -18,6 +18,24 @@ export function isRetryableQuotationParseStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 503;
 }
 
+async function excelToTextForGemini(buffer: ArrayBuffer): Promise<string> {
+  const XLSX = await import('xlsx');
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const parts: string[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+      header: 1,
+      raw: false,
+      blankrows: false,
+    });
+    parts.push(`=== Sheet: ${sheetName} ===`);
+    for (const row of rows) {
+      parts.push(row.map(cell => String(cell ?? '')).join('\t'));
+    }
+  }
+  return parts.join('\n');
+}
+
 export async function handleQuotationParseRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -38,21 +56,35 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
     if (!blob || blob.statusCode !== 200) {
       return sendError(res, 404, 'FILE_NOT_FOUND', '报价原文件不存在。');
     }
-    const base64 = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString('base64');
+
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const promptText = isExcel
-      ? `解析这份供应商报价单（Excel文件）。逐行读取每个sheet的产品、价格和报价信息。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`
-      : `解析这份供应商报价单。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`;
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash',
-      contents: {
+    let contents: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
+
+    if (isExcel) {
+      const arrayBuffer = await new Response(blob.stream).arrayBuffer();
+      const textData = await excelToTextForGemini(arrayBuffer);
+      contents = {
         parts: [
           {
-            text: promptText,
+            text: `以下是Excel报价单的内容（Tab分隔，每行为一行）：\n\n${textData}\n\n解析这份供应商报价单。逐行读取每个sheet的产品、价格和报价信息。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`,
+          },
+        ],
+      };
+    } else {
+      const base64 = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString('base64');
+      contents = {
+        parts: [
+          {
+            text: `解析这份供应商报价单。只能提取文件中明确存在的信息，不要猜测价格、币种、税率、单位或包装数量。返回供应商、报价日期、有效期、币种、固定汇率、含税模式、付款方式、交期和全部产品行。`,
           },
           { inlineData: { mimeType, data: base64 } },
         ],
-      },
+      };
+    }
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-flash',
+      contents,
       config: {
         responseMimeType: 'application/json',
         responseSchema: {

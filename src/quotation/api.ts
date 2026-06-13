@@ -1,5 +1,6 @@
 import {
   cloudbaseCollections,
+  deleteDocument,
   listDocuments,
   setDocument,
 } from '../lib/cloudbaseData';
@@ -60,6 +61,15 @@ export async function saveProductGroup(group: SupplierProductGroup): Promise<voi
 
 export async function saveQuotationItem(item: SupplierQuotationItem): Promise<void> {
   await setDocument(cloudbaseCollections.supplierQuotationItems, item.id, item);
+}
+
+export async function deleteQuotation(quotationId: string, items: SupplierQuotationItem[]): Promise<void> {
+  const now = new Date().toISOString();
+  const quotation = { deletedAt: now, updatedAt: now };
+  await setDocument(cloudbaseCollections.supplierQuotations, quotationId, quotation);
+  await Promise.all(
+    items.map(item => setDocument(cloudbaseCollections.supplierQuotationItems, item.id, { deletedAt: now, updatedAt: now }))
+  );
 }
 
 export async function parseQuotationFile(pathname: string, mimeType: string): Promise<ParsedQuotationValidation> {
