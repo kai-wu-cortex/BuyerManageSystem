@@ -386,13 +386,8 @@ export default function App() {
     return () => { isMounted = false; };
   }, []);
 
-  // Initial load & real-time CloudBase sync
+  // Load from localStorage on mount (independent of auth)
   useEffect(() => {
-    if (authStatus !== 'authenticated' || userAccess.mode !== 'full') {
-      return undefined;
-    }
-
-    // 1. Sync Purchase Orders from localStorage
     const savedPO = localStorage.getItem("purchase_orders");
     if (savedPO) {
       try {
@@ -401,6 +396,13 @@ export default function App() {
       } catch (e) {
         console.error("Failed to parse POs from localStorage:", e);
       }
+    }
+  }, []);
+
+  // Initial load & real-time CloudBase sync
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || userAccess.mode !== 'full') {
+      return undefined;
     }
 
     const updateTime = () => {

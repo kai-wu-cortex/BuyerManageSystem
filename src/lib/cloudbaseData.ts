@@ -101,7 +101,6 @@ export type CollectionName =
   | 'ledger_backup_chunks'
   | 'buyer_system_view_settings'
   | 'noteboard_items'
-  | 'starred_po_ids'
   | 'supplier_profiles'
   | 'supplier_quotations'
   | 'supplier_quotation_items'
@@ -454,18 +453,24 @@ export async function saveBuyerSystemViewSettings(
 
 export async function loadStarredPOs(user: CloudbaseAuthUser): Promise<string[]> {
   if (isBrowserOffline()) return [];
-  const doc = await getDocument<{ id: string; starredIds: string[] }>(
-    'starred_po_ids',
-    user.uid,
+  const doc = await getDocument<BuyerSystemViewSettingsRecord>(
+    'buyer_system_view_settings',
+    getBuyerSystemViewSettingsDocumentId(user),
   );
-  return doc?.starredIds ?? [];
+  return (doc as unknown as { starredPoIds?: string[] })?.starredPoIds ?? [];
 }
 
 export async function saveStarredPOs(user: CloudbaseAuthUser, ids: string[]): Promise<void> {
   if (isBrowserOffline()) return;
-  await setDocument('starred_po_ids', user.uid, {
-    id: user.uid,
-    starredIds: ids,
+  const docId = getBuyerSystemViewSettingsDocumentId(user);
+  const existing = await getDocument<BuyerSystemViewSettingsRecord>('buyer_system_view_settings', docId);
+  await setDocument('buyer_system_view_settings', docId, {
+    ...existing,
+    id: docId,
+    uid: user.uid,
+    username: user.username,
+    starredPoIds: ids,
+    updatedAt: new Date().toISOString(),
   });
 }
 
