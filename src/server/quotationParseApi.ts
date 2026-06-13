@@ -36,6 +36,55 @@ async function excelToTextForGemini(buffer: ArrayBuffer): Promise<string> {
   return parts.join('\n');
 }
 
+const BASE_INSTRUCTION = `你是专业的报价单解析引擎。请按以下两步流程解析：
+
+## 第一步：识别表头并映射到系统字段
+
+扫描表格表头，识别每列含义，映射到系统字段：
+
+| 系统字段 | 可能的表头名称 |
+|---------|--------------|
+| sourceProductCode | 编号、编码、料号、型号、产品代码、Item No、Part No、SKU |
+| sourceProductName | 产品名称、品名、商品名、物料名称、Product Name、Description |
+| sourceSpecification | 规格、参数、尺寸、厚度、粒径、直径、Spec、Size |
+| sourceUnit | 单位、计量单位、Unit |
+| sourcePackageDescription | 包装、包装方式、包装说明 |
+| sourcePackageQuantity | 包装数量、装箱数、每箱数量、箱规、Pack Qty |
+| sourceUnitPrice | 单价、价格、含税价、未税价、Price |
+| minimumOrderQuantity | MOQ、最小起订量、起订量 |
+| lineLeadTimeDays | 交期、货期、Lead Time |
+
+无法映射的列直接忽略。
+
+## 第二步：逐行读取产品数据
+
+### 过滤无关信息
+- 跳过公司介绍、地址、电话、传真、邮箱、网址等联系信息
+- 跳过发货规则、付款条款、免责声明、备注说明等非产品数据
+- 跳过空行、分隔行、合计行、小计行
+- 只保留实际的产品数据行
+
+### 产品名称与型号分离
+- 同一单元格包含名称和型号（如"LED灯珠-5050-RED"），拆分为：
+  - sourceProductName = 纯产品名称（"LED灯珠"）
+  - sourceSpecification = 规格参数（"5050 RED"）
+- 已有独立编码列和名称列时保持原样
+
+### 多规格展开为独立行
+- 同一产品的不同规格变体（不同厚度、粒径、尺寸、颜色等），每种变体单独一行
+- 例：0.5mm/1.0mm/2.0mm三种厚度 → 3行，各自填对应规格和价格
+
+### 矩阵表展开
+- 行=产品，列=不同规格的价格 → 每个价格单元格展开为独立行
+
+### 合并单元格处理
+- 产品名称跨多行时，下方每行都是该产品的不同变体，每行独立记录
+
+### 数据准确性
+- 只提取明确存在的信息，不要猜测
+- 价格必须与对应产品行匹配
+- 数字字段只填纯数字（不含单位）`;
+
 export async function handleQuotationParseRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -59,40 +108,9 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
     }
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const extraPrompt = customPrompt ? `\n\n用户额外要求：${customPrompt}` : '';
+    const fullPrompt = BASE_INSTRUCTION + extraPrompt;
     let contents: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
-
-    const baseInstruction = `你是一个专业的报价单解析引擎。请严格按照以下规则解析报价单：
-
-## 解析规则
-
-### 1. 表头信息提取
-- 供应商名称、报价单号、报价日期、有效期、币种、汇率、税率、含税模式、付款方式、交期
-- 如果某些字段未明确标注，留空即可，不要猜测
-
-### 2. 产品行解析（核心规则）
-- **产品名称与型号分离**：如果产品名称和型号写在同一单元格（如"XX产品-A001"），请拆分为：产品名称="XX产品"，产品编码="A001"
-- **产品系列展开**：如果产品编号用范围表示（如"A-001~A-005"或"Model X-1 到 X-10"），请展开为每一项单独的行，每行赋予正确的价格。如果范围内价格不同，按实际价格填写；如果价格相同，每行都填相同价格
-- **多规格/多厚度展开**：同一产品有不同规格（如厚度0.5mm/1.0mm/2.0mm），每个规格视为独立产品行，分别填写各自的规格和价格
-- **矩阵式价格表**：如果表格是矩阵格式（行是产品，列是不同规格/数量的价格），请将每个价格单元格展开为独立的产品行，在sourceSpecification中注明对应的规格/数量条件
-- **合并单元格处理**：如果一个产品名称跨越多行，下方的每行都是该产品的不同规格/变体，为每行创建独立的产品记录
-
-### 3. 字段映射
-- sourceProductCode: 产品编码/料号/编号/型号
-- sourceProductName: 产品名称（不含型号部分）
-- sourceSpecification: 规格/型号/厚度/尺寸等详细参数
-- sourceUnit: 计量单位
-- sourcePackageDescription: 包装说明/包装方式
-- sourcePackageQuantity: 包装数量/每箱数量/装箱数
-- sourceUnitPrice: 单价/含税单价
-- minimumOrderQuantity: 最小起订量/MOQ
-- lineLeadTimeDays: 交期/货期
-
-### 4. 数据准确性
-- 只提取文件中明确存在的信息，不要猜测
-- 价格必须与对应产品行匹配，不要张冠李戴
-- 如果一个产品有多个价格条件（如不同数量段），每个条件单独一行
-- 数字字段（价格、数量、交期）只填数字，不填单位`;
-const extraPrompt = customPrompt ? `\n\n用户额外要求：${customPrompt}` : '';
 
     if (isExcel) {
       const arrayBuffer = await new Response(blob.stream).arrayBuffer();
@@ -100,7 +118,7 @@ const extraPrompt = customPrompt ? `\n\n用户额外要求：${customPrompt}` : 
       contents = {
         parts: [
           {
-            text: `以下是Excel报价单的原始数据（Tab分隔，每行为一行，第一行通常是表头）：\n\n${textData}\n\n${baseInstruction}${extraPrompt}`,
+            text: `以下是Excel报价单的原始数据（Tab分隔，每行为一行，第一行通常是表头）：\n\n${textData}\n\n${fullPrompt}`,
           },
         ],
       };
@@ -108,9 +126,7 @@ const extraPrompt = customPrompt ? `\n\n用户额外要求：${customPrompt}` : 
       const base64 = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString('base64');
       contents = {
         parts: [
-          {
-            text: `${baseInstruction}${extraPrompt}`,
-          },
+          { text: fullPrompt },
           { inlineData: { mimeType, data: base64 } },
         ],
       };
