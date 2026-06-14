@@ -124,9 +124,19 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
       };
     } else {
       const base64 = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString('base64');
+      const isImage = mimeType.startsWith('image/');
+      const imageInstruction = isImage ? `这是一张报价单的图片。请先用OCR识别图片中的所有文字内容，然后按以下步骤处理：
+
+1. 识别图片中的表格结构（行列关系）
+2. 识别每个单元格中的文字（包括中文、英文、数字、特殊符号）
+3. 如果文字模糊或不清晰，根据上下文推断最可能的内容
+4. 识别表头行，确定每列的含义
+5. 逐行读取产品数据
+
+` : '';
       contents = {
         parts: [
-          { text: fullPrompt },
+          { text: imageInstruction + fullPrompt },
           { inlineData: { mimeType, data: base64 } },
         ],
       };
