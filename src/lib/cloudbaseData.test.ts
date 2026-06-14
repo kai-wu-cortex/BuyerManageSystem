@@ -9,8 +9,10 @@ import {
   isLedgerBackupNewerThanLoaded,
   listDocuments,
   loadBuyerSystemViewSettings,
+  loadLedgerBackupOrders,
   normalizeCloudbaseDocumentId,
   setDocument,
+  shouldLoadLedgerBackup,
   sortBackupsNewestFirst,
 } from './cloudbaseData';
 import type { PurchaseOrder } from '../types';
@@ -86,6 +88,23 @@ assert.equal(getLatestLedgerBackup(backups)?.id, 'new');
 assert.equal(getLatestLedgerBackup([]), null);
 assert.equal(isLedgerBackupNewerThanLoaded(getLatestLedgerBackup(backups), 299), true);
 assert.equal(isLedgerBackupNewerThanLoaded(getLatestLedgerBackup(backups), 300), false);
+assert.equal(
+  shouldLoadLedgerBackup(
+    { id: 'latest', rawTime: 300, name: 'latest', timeCreated: 'latest', size: 1, orderCount: 1485 },
+    300,
+    315,
+  ),
+  true,
+  'a partial local ledger should reload even when the backup timestamp was already marked as loaded',
+);
+assert.equal(
+  shouldLoadLedgerBackup(
+    { id: 'latest', rawTime: 300, name: 'latest', timeCreated: 'latest', size: 1, orderCount: 1485 },
+    300,
+    1485,
+  ),
+  false,
+);
 assert.equal(formatLedgerBackupSize(2048), '2.0 KB');
 assert.equal(formatLedgerBackupSize(0), '未知');
 
@@ -150,5 +169,39 @@ const paginatedDocuments = await listDocuments<{ id: string }>('supplier_quotati
 assert.equal(paginatedDocuments.length, 1001, 'listDocuments should load every page instead of truncating at 1000 records');
 assert.deepEqual(requestedOffsets, ['0', '1000']);
 globalThis.fetch = paginationFetch;
+
+const incompleteChunkFetch = globalThis.fetch;
+globalThis.fetch = (async (input: string | URL | Request) => {
+  const url = String(input);
+  if (url.endsWith('/ledger_backup_chunks/backup-1_chunk_0000')) {
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        id: 'backup-1_chunk_0000',
+        backupId: 'backup-1',
+        chunkIndex: 0,
+        orders: [makeOrder('001')],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+  return new Response(JSON.stringify({ success: false, message: 'temporary failure' }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}) as typeof fetch;
+await assert.rejects(
+  () => loadLedgerBackupOrders({
+    id: 'backup-1',
+    name: 'backup-1',
+    timeCreated: '2026-06-13',
+    rawTime: 1,
+    size: 1,
+    orderCount: 2,
+    chunkCount: 2,
+  }),
+  /分块加载不完整/,
+  'partial backup chunks must never be treated as a complete ledger',
+);
+globalThis.fetch = incompleteChunkFetch;
 
 console.log('cloudbaseData tests passed ✅');

@@ -34,6 +34,7 @@ import {
   replaceCollection,
   replaceRecordCollection,
   saveLedgerBackup,
+  shouldLoadLedgerBackup,
   signInToCloudbase,
   signOutFromCloudbase,
   getCurrentCloudbaseUser,
@@ -502,8 +503,7 @@ export default function App() {
       .then(async records => {
         const latest = getLatestLedgerBackup(records);
         setLatestRemoteLedgerBackup(latest);
-        // Auto-load latest backup if local storage is empty
-        if (latest && purchaseOrdersRef.current.length === 0) {
+        if (shouldLoadLedgerBackup(latest, readStoredLedgerBackupTime(), purchaseOrdersRef.current.length)) {
           try {
             let backupToLoad = latest;
             if (!Array.isArray(backupToLoad.orders) && backupToLoad.chunkCount) {
@@ -512,7 +512,7 @@ export default function App() {
             }
             const parsedOrders = await loadLedgerBackupOrders(backupToLoad);
             if (Array.isArray(parsedOrders) && parsedOrders.length > 0) {
-              const { merged } = mergePurchaseOrdersById([], parsedOrders);
+              const { merged } = mergePurchaseOrdersById(purchaseOrdersRef.current, parsedOrders);
               handleUpdateOrders(merged);
               markLedgerBackupLoaded(backupToLoad.rawTime);
             }

@@ -567,25 +567,45 @@ export async function loadLedgerBackupOrders(backup: LedgerBackup): Promise<Purc
     return null;
   }
 
-  const chunkPromises = Array.from({ length: chunkCount }, (_, index) => (
-    getDocument<LedgerBackupChunk>('ledger_backup_chunks', `${backup.id}_chunk_${String(index).padStart(4, '0')}`)
-  ));
+  const loadChunk = async (index: number): Promise<LedgerBackupChunk | null> => {
+    const chunkId = `${backup.id}_chunk_${String(index).padStart(4, '0')}`;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await getDocument<LedgerBackupChunk>('ledger_backup_chunks', chunkId);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  };
+  const chunkPromises = Array.from({ length: chunkCount }, (_, index) => loadChunk(index));
   const results = await Promise.allSettled(chunkPromises);
   const chunks = results
     .filter((r): r is PromiseFulfilledResult<LedgerBackupChunk | null> => r.status === 'fulfilled')
     .map(r => r.value);
 
   const validChunks = chunks.filter(
-    (chunk): chunk is LedgerBackupChunk => Boolean(chunk) && Array.isArray(chunk.orders),
+    (chunk): chunk is LedgerBackupChunk => (
+      Boolean(chunk)
+      && chunk.backupId === backup.id
+      && Number.isInteger(chunk.chunkIndex)
+      && Array.isArray(chunk.orders)
+    ),
   );
 
-  if (validChunks.length === 0) {
-    return null;
+  const uniqueChunkIndexes = new Set(validChunks.map(chunk => chunk.chunkIndex));
+  if (validChunks.length !== chunkCount || uniqueChunkIndexes.size !== chunkCount) {
+    throw new Error(`台账备份分块加载不完整（${uniqueChunkIndexes.size}/${chunkCount}），已保留当前台账，请刷新后重试。`);
   }
 
-  return validChunks
+  const orders = validChunks
     .sort((a, b) => a.chunkIndex - b.chunkIndex)
     .flatMap(chunk => chunk.orders);
+  if (Number.isFinite(backup.orderCount) && backup.orderCount !== undefined && orders.length !== backup.orderCount) {
+    throw new Error(`台账备份订单数不完整（${orders.length}/${backup.orderCount}），已保留当前台账，请刷新后重试。`);
+  }
+  return orders;
 }
 
 export function sortBackupsNewestFirst(backups: LedgerBackup[]): LedgerBackup[] {
@@ -603,6 +623,18 @@ export function isLedgerBackupNewerThanLoaded(backup: LedgerBackup | null, loade
 
   const normalizedLoadedTime = Number.isFinite(loadedRawTime) && loadedRawTime > 0 ? loadedRawTime : 0;
   return backup.rawTime > normalizedLoadedTime;
+}
+
+export function shouldLoadLedgerBackup(
+  backup: LedgerBackup | null,
+  loadedRawTime: number,
+  currentOrderCount: number,
+): boolean {
+  if (!backup) return false;
+  if (currentOrderCount <= 0 || isLedgerBackupNewerThanLoaded(backup, loadedRawTime)) {
+    return true;
+  }
+  return Number.isFinite(backup.orderCount) && (backup.orderCount ?? 0) > currentOrderCount;
 }
 
 export function formatLedgerBackupSize(size: number): string {
