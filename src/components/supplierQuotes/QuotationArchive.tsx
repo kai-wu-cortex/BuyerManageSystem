@@ -10,6 +10,7 @@ import {
   Image,
   Loader2,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Sparkles,
@@ -154,10 +155,13 @@ function PreviewPanel({
   const [editStatus, setEditStatus] = useState(quotation.status);
   const [editSummary, setEditSummary] = useState(quotation.summary ?? '');
   const [customColumns, setCustomColumns] = useState<Record<string, string[]>>(quotation.smartFields ?? {});
+  const [editItems, setEditItems] = useState<SupplierQuotationItem[]>(items);
   const [smartPrompt, setSmartPrompt] = useState('');
   const [smartColName, setSmartColName] = useState('');
   const [smartLoading, setSmartLoading] = useState(false);
   const [smartError, setSmartError] = useState('');
+  const [reparsePrompt, setReparsePrompt] = useState('');
+  const [reparseLoading, setReparseLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const isExcel = quotation.sourceFile.mimeType.includes('spreadsheet') || quotation.sourceFile.mimeType === 'application/vnd.ms-excel';
@@ -167,16 +171,21 @@ function PreviewPanel({
     setMessage('');
     try {
       const now = new Date().toISOString();
-      await setDocument(cloudbaseCollections.supplierQuotations, quotation.id, {
-        ...quotation,
-        quotationNumber: editNumber,
-        currency: editCurrency.toUpperCase(),
-        taxRate: editTaxRate,
-        status: editStatus,
-        summary: editSummary,
-        smartFields: customColumns,
-        updatedAt: now,
-      });
+      await Promise.all([
+        setDocument(cloudbaseCollections.supplierQuotations, quotation.id, {
+          ...quotation,
+          quotationNumber: editNumber,
+          currency: editCurrency.toUpperCase(),
+          taxRate: editTaxRate,
+          status: editStatus,
+          summary: editSummary,
+          smartFields: customColumns,
+          updatedAt: now,
+        }),
+        ...editItems.map(item =>
+          setDocument(cloudbaseCollections.supplierQuotationItems, item.id, { ...item, updatedAt: now })
+        ),
+      ]);
       setMessage('已保存');
       await onSaved();
     } catch (err) {
@@ -224,6 +233,100 @@ function PreviewPanel({
       delete next[colName];
       return next;
     });
+  };
+
+  const handleReparse = async () => {
+    if (!reparsePrompt.trim()) return;
+    setReparseLoading(true);
+    setMessage('');
+    try {
+      const res = await fetch('/api/quotation/parse', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pathname: quotation.sourceFile.pathname,
+          mimeType: quotation.sourceFile.mimeType,
+          customPrompt: reparsePrompt.trim(),
+        }),
+      });
+      const payload = await res.json() as { success?: boolean; data?: { value?: { items?: Array<Record<string, unknown>> }; issues?: unknown[] }; message?: string };
+      if (!res.ok || !payload.success || !payload.data) {
+        throw new Error(payload.message ?? '重新解析失败。');
+      }
+      const parsed = payload.data.value;
+      if (!parsed?.items?.length) throw new Error('重新解析未获取到产品数据。');
+      const now = new Date().toISOString();
+      const newItems: SupplierQuotationItem[] = parsed.items.map((item, index) => ({
+        id: editItems[index]?.id ?? `quote_item_${Date.now()}_${index}`,
+        quotationId: quotation.id,
+        lineNumber: index + 1,
+        sourceProductCode: String(item.sourceProductCode ?? ''),
+        sourceProductName: String(item.sourceProductName ?? ''),
+        sourceSpecification: String(item.sourceSpecification ?? ''),
+        sourceUnit: String(item.sourceUnit ?? ''),
+        sourcePackageDescription: String(item.sourcePackageDescription ?? ''),
+        sourcePackageQuantity: item.sourcePackageQuantity != null ? Number(item.sourcePackageQuantity) : null,
+        sourceUnitPrice: item.sourceUnitPrice != null ? Number(item.sourceUnitPrice) : null,
+        minimumOrderQuantity: item.minimumOrderQuantity != null ? Number(item.minimumOrderQuantity) : null,
+        lineLeadTimeDays: item.lineLeadTimeDays != null ? Number(item.lineLeadTimeDays) : null,
+        productGroupId: null,
+        groupMatchStatus: 'unmatched',
+        normalizedQuantity: null,
+        normalizedUnit: null,
+        normalizedTaxIncludedCnyPrice: null,
+        normalizationDetails: null,
+        fieldConfidence: {},
+        reviewIssues: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      }));
+      setEditItems(newItems);
+      setReparsePrompt('');
+      setMessage(`重新解析完成，共 ${newItems.length} 项产品。`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReparseLoading(false);
+    }
+  };
+
+  const updateItemField = (index: number, field: keyof SupplierQuotationItem, value: string | number | null) => {
+    setEditItems(current => current.map((item, i) => i === index ? { ...item, [field]: value } : item));
+  };
+
+  const addRow = () => {
+    const now = new Date().toISOString();
+    setEditItems(current => [...current, {
+      id: `quote_item_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      quotationId: quotation.id,
+      lineNumber: current.length + 1,
+      sourceProductCode: '',
+      sourceProductName: '',
+      sourceSpecification: '',
+      sourceUnit: '',
+      sourcePackageDescription: '',
+      sourcePackageQuantity: null,
+      sourceUnitPrice: null,
+      minimumOrderQuantity: null,
+      lineLeadTimeDays: null,
+      productGroupId: null,
+      groupMatchStatus: 'unmatched',
+      normalizedQuantity: null,
+      normalizedUnit: null,
+      normalizedTaxIncludedCnyPrice: null,
+      normalizationDetails: null,
+      fieldConfidence: {},
+      reviewIssues: [],
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    }]);
+  };
+
+  const removeRow = (index: number) => {
+    setEditItems(current => current.filter((_, i) => i !== index));
   };
 
   const customColNames = Object.keys(customColumns);
@@ -299,17 +402,45 @@ function PreviewPanel({
 
           {/* Items table */}
           <div className="mb-3 flex items-center justify-between">
-            <div className="text-xs font-semibold text-slate-700">产品明细 ({items.length} 项)</div>
-            {customColNames.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {customColNames.map(name => (
-                  <span key={name} className="flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700">
-                    <Sparkles className="h-2.5 w-2.5" />{name}
-                    <button type="button" onClick={() => removeSmartColumn(name)} className="ml-0.5 text-purple-400 hover:text-purple-600">&times;</button>
-                  </span>
-                ))}
-              </div>
-            )}
+            <div className="text-xs font-semibold text-slate-700">产品明细 ({editItems.length} 项)</div>
+            <div className="flex items-center gap-2">
+              {customColNames.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {customColNames.map(name => (
+                    <span key={name} className="flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700">
+                      <Sparkles className="h-2.5 w-2.5" />{name}
+                      <button type="button" onClick={() => removeSmartColumn(name)} className="ml-0.5 text-purple-400 hover:text-purple-600">&times;</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <button type="button" onClick={addRow} className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50">
+                <Plus className="h-3 w-3" /> 添加行
+              </button>
+            </div>
+          </div>
+
+          {/* Re-parse with custom prompt */}
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="mb-2 text-[10px] font-semibold text-amber-700">重新解析（自定义提示词）</p>
+            <div className="flex items-start gap-2">
+              <input
+                value={reparsePrompt}
+                onChange={e => setReparsePrompt(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !reparseLoading) void handleReparse(); }}
+                placeholder="输入提示词重新解析报价单（如：请仔细识别图片中的表格，提取所有产品信息...）"
+                className="flex-1 rounded-lg border border-amber-200 px-3 py-2 text-xs outline-none focus:border-amber-400"
+                disabled={reparseLoading}
+              />
+              <button
+                type="button"
+                disabled={reparseLoading || !reparsePrompt.trim()}
+                onClick={() => void handleReparse()}
+                className="flex shrink-0 items-center gap-1 rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {reparseLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} 重新解析
+              </button>
+            </div>
           </div>
 
           {/* Smart field input */}
@@ -343,26 +474,28 @@ function PreviewPanel({
           </div>
           {smartError && <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{smartError}</div>}
           <div className="overflow-auto rounded-lg border border-slate-200">
-            <table className="min-w-[600px] w-full text-xs">
+            <table className="min-w-[700px] w-full text-xs">
               <thead><tr className="border-b border-slate-200 bg-slate-50">
-                <th className="px-3 py-2 text-left font-semibold text-slate-500">#</th>
-                <th className="px-3 py-2 text-left font-semibold text-slate-500">产品名称</th>
-                <th className="px-3 py-2 text-left font-semibold text-slate-500">规格</th>
-                <th className="px-3 py-2 text-left font-semibold text-slate-500">单位</th>
-                <th className="px-3 py-2 text-left font-semibold text-slate-500">包装数</th>
-                <th className="px-3 py-2 text-left font-semibold text-slate-500">单价</th>
-                {customColNames.map(name => <th key={name} className="px-3 py-2 text-left font-semibold text-purple-600">{name}</th>)}
+                <th className="px-2 py-2 text-left font-semibold text-slate-500 w-8">#</th>
+                <th className="px-2 py-2 text-left font-semibold text-slate-500">产品名称</th>
+                <th className="px-2 py-2 text-left font-semibold text-slate-500">规格</th>
+                <th className="px-2 py-2 text-left font-semibold text-slate-500">单位</th>
+                <th className="px-2 py-2 text-left font-semibold text-slate-500">包装数</th>
+                <th className="px-2 py-2 text-left font-semibold text-slate-500">单价</th>
+                {customColNames.map(name => <th key={name} className="px-2 py-2 text-left font-semibold text-purple-600">{name}</th>)}
+                <th className="px-2 py-2 w-8"></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
-                {items.map((item, index) => (
+                {editItems.map((item, index) => (
                   <tr key={item.id} className="hover:bg-slate-50">
-                    <td className="px-3 py-2 text-slate-500">{index + 1}</td>
-                    <td className="px-3 py-2 text-slate-700">{item.sourceProductName || '-'}</td>
-                    <td className="px-3 py-2 text-slate-700">{item.sourceSpecification || '-'}</td>
-                    <td className="px-3 py-2 text-slate-700">{item.sourceUnit || '-'}</td>
-                    <td className="px-3 py-2 text-slate-700">{item.sourcePackageQuantity ?? '-'}</td>
-                    <td className="px-3 py-2 text-slate-700">{item.sourceUnitPrice ?? '-'}</td>
-                    {customColNames.map(name => <td key={name} className="px-3 py-2 text-purple-700">{customColumns[name]?.[index] || '-'}</td>)}
+                    <td className="px-2 py-1.5 text-slate-500">{index + 1}</td>
+                    <td className="px-1 py-1"><input value={item.sourceProductName} onChange={e => updateItemField(index, 'sourceProductName', e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1 text-xs" /></td>
+                    <td className="px-1 py-1"><input value={item.sourceSpecification} onChange={e => updateItemField(index, 'sourceSpecification', e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1 text-xs" /></td>
+                    <td className="px-1 py-1"><input value={item.sourceUnit} onChange={e => updateItemField(index, 'sourceUnit', e.target.value)} className="w-16 rounded border border-slate-200 px-2 py-1 text-xs" /></td>
+                    <td className="px-1 py-1"><input type="number" value={item.sourcePackageQuantity ?? ''} onChange={e => updateItemField(index, 'sourcePackageQuantity', e.target.value === '' ? null : Number(e.target.value))} className="w-20 rounded border border-slate-200 px-2 py-1 text-xs" /></td>
+                    <td className="px-1 py-1"><input type="number" value={item.sourceUnitPrice ?? ''} onChange={e => updateItemField(index, 'sourceUnitPrice', e.target.value === '' ? null : Number(e.target.value))} className="w-24 rounded border border-slate-200 px-2 py-1 text-xs" /></td>
+                    {customColNames.map(name => <td key={name} className="px-2 py-1.5 text-purple-700">{customColumns[name]?.[index] || '-'}</td>)}
+                    <td className="px-1 py-1"><button type="button" onClick={() => removeRow(index)} className="p-1 text-slate-400 hover:text-red-500"><Trash2 className="h-3 w-3" /></button></td>
                   </tr>
                 ))}
               </tbody>
