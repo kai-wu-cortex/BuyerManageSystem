@@ -219,6 +219,8 @@ function PreviewPanel({
     setMessage('');
     try {
       const now = new Date().toISOString();
+      const newItemIds = new Set(editItems.map(i => i.id));
+      const staleItems = items.filter(i => !newItemIds.has(i.id));
       await Promise.all([
         setDocument(cloudbaseCollections.supplierQuotations, quotation.id, {
           ...quotation,
@@ -232,6 +234,9 @@ function PreviewPanel({
         }),
         ...editItems.map(item =>
           setDocument(cloudbaseCollections.supplierQuotationItems, item.id, { ...item, updatedAt: now })
+        ),
+        ...staleItems.map(item =>
+          setDocument(cloudbaseCollections.supplierQuotationItems, item.id, { deletedAt: now, updatedAt: now })
         ),
       ]);
       setMessage('已保存');
