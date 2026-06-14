@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import QuotationArchive from './QuotationArchive';
 import SupplierProfiles from './SupplierProfiles';
+import FilePreview from './FilePreview';
 import { loadQuotationWorkspace, type QuotationWorkspace } from '../../quotation/api';
 
 type QuotationView = 'archive' | 'profiles';
@@ -32,6 +33,7 @@ export default function SupplierQuotationApp() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewQuotationId, setPreviewQuotationId] = useState<string | null>(null);
+  const [filePreview, setFilePreview] = useState<{ pathname: string; fileName: string; mimeType: string } | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -64,6 +66,7 @@ export default function SupplierQuotationApp() {
             onRefresh={refresh}
             initialPreviewId={previewQuotationId}
             onPreviewClosed={() => setPreviewQuotationId(null)}
+            onFilePreview={setFilePreview}
           />
         );
       case 'profiles':
@@ -75,6 +78,7 @@ export default function SupplierQuotationApp() {
             onSaved={refresh}
             onOpenQuotation={() => {}}
             onPreviewQuotation={handlePreviewFromProfiles}
+            onFilePreview={setFilePreview}
           />
         );
       default:
@@ -126,6 +130,18 @@ export default function SupplierQuotationApp() {
           );
         })}
       </nav>
+
+      {/* File preview overlay */}
+      {filePreview && (
+        <div className="fixed inset-0 z-50 bg-white">
+          <FilePreview
+            pathname={filePreview.pathname}
+            fileName={filePreview.fileName}
+            mimeType={filePreview.mimeType}
+            onClose={() => setFilePreview(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }

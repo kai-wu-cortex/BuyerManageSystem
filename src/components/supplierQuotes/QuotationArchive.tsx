@@ -43,6 +43,7 @@ interface Props {
   onRefresh: () => Promise<void>;
   initialPreviewId?: string | null;
   onPreviewClosed?: () => void;
+  onFilePreview?: (file: { pathname: string; fileName: string; mimeType: string }) => void;
 }
 
 const MAX_SIZE = 25 * 1024 * 1024;
@@ -413,7 +414,7 @@ function ExcelPreview({ pathname }: { pathname: string }) {
   );
 }
 
-export default function QuotationArchive({ workspace, loading, onRefresh, initialPreviewId, onPreviewClosed }: Props) {
+export default function QuotationArchive({ workspace, loading, onRefresh, initialPreviewId, onPreviewClosed, onFilePreview }: Props) {
   const [status, setStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showUpload, setShowUpload] = useState(false);
@@ -582,7 +583,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
                     <td className="px-4 py-3 max-w-[200px]"><p className="truncate text-xs text-slate-500">{quotation.summary || '-'}</p></td>
                     <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
-                        <a href={`/api/quotation/file?pathname=${encodeURIComponent(quotation.sourceFile.pathname)}`} target="_blank" rel="noreferrer" className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></a>
+                        <button type="button" onClick={() => onFilePreview?.({ pathname: quotation.sourceFile.pathname, fileName: quotation.sourceFile.fileName, mimeType: quotation.sourceFile.mimeType })} className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></button>
                         <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
                           {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                         </button>
