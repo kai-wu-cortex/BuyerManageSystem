@@ -49,6 +49,15 @@ function getQueryFlag(req: ApiRequest, name: string): boolean {
   return false;
 }
 
+function getQueryInteger(req: ApiRequest, name: string, fallback: number, maximum: number): number {
+  const raw = req.query?.[name];
+  const value = typeof raw === 'string'
+    ? Number(raw)
+    : Array.isArray(raw) && typeof raw[0] === 'string' ? Number(raw[0]) : fallback;
+  if (!Number.isInteger(value) || value < 0) return fallback;
+  return Math.min(value, maximum);
+}
+
 function parseProjection(req: ApiRequest): Record<string, 1 | 0> | undefined {
   const raw = req.query?.fields;
   const value = typeof raw === 'string' ? raw : Array.isArray(raw) && typeof raw[0] === 'string' ? raw[0] : null;
@@ -61,9 +70,9 @@ function parseProjection(req: ApiRequest): Record<string, 1 | 0> | undefined {
   return Object.keys(projection).length ? projection : undefined;
 }
 
-function buildPipeline(req: ApiRequest, includeIds: boolean): Document[] {
+function buildPipeline(req: ApiRequest, includeIds: boolean, offset: number, limit: number): Document[] {
   if (includeIds) {
-    return [{ $project: { _id: 1 } }, { $limit: 1000 }];
+    return [{ $project: { _id: 1 } }, { $skip: offset }, { $limit: limit }];
   }
 
   const stages: Document[] = [];
@@ -98,7 +107,7 @@ function buildPipeline(req: ApiRequest, includeIds: boolean): Document[] {
     stages.push({ $project: projection });
   }
 
-  stages.push({ $limit: 1000 });
+  stages.push({ $skip: offset }, { $limit: limit });
   return stages;
 }
 
@@ -124,17 +133,19 @@ export async function listMongoDocuments(req: ApiRequest, res: ApiResponse): Pro
   }
   const collection = await getMongoCollection<MongoRecord>(collectionName);
   const includeIds = getQueryFlag(req, 'includeIds');
+  const offset = getQueryInteger(req, 'offset', 0, Number.MAX_SAFE_INTEGER);
+  const limit = getQueryInteger(req, 'limit', 1000, 1000);
   if (includeIds) {
-    const idDocs = await collection.find({}, { projection: { _id: 1 } }).limit(1000).toArray();
+    const idDocs = await collection.find({}, { projection: { _id: 1 } }).skip(offset).limit(limit).toArray();
     return res.status(200).json({ success: true, data: idDocs.map(record => record._id) });
   }
 
-  const pipeline = buildPipeline(req, false);
+  const pipeline = buildPipeline(req, false, offset, limit);
   // 仅当请求方真的指定了 projection / sizeFields 才走聚合管道，否则维持原全量 find
-  const usingPipeline = pipeline.length > 1;
+  const usingPipeline = Boolean(parseProjection(req) || req.query?.sizeFields);
   const records = usingPipeline
     ? await collection.aggregate(pipeline).toArray()
-    : await collection.find({}).limit(1000).toArray();
+    : await collection.find({}).skip(offset).limit(limit).toArray();
   return res.status(200).json({ success: true, data: records.map(record => stripMongoId(record as MongoRecord)) });
 }
 

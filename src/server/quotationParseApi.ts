@@ -36,7 +36,7 @@ async function excelToTextForGemini(buffer: ArrayBuffer): Promise<string> {
   return parts.join('\n');
 }
 
-const BASE_INSTRUCTION = `你是专业的报价单解析引擎。请按以下两步流程解析：
+export const BASE_QUOTATION_PARSE_INSTRUCTION = `你是专业的报价单解析引擎。请按以下两步流程解析：
 
 ## 第一步：识别表头并映射到系统字段
 
@@ -69,6 +69,7 @@ const BASE_INSTRUCTION = `你是专业的报价单解析引擎。请按以下两
   - sourceProductName = 纯产品名称（"LED灯珠"）
   - sourceSpecification = 规格参数（"5050 RED"）
 - 已有独立编码列和名称列时保持原样
+- 产品名称末尾连续的英文与数字编号是产品关键 ID。例如“镭射银LB100”必须完整保留在 sourceProductName 中，不能删除、忽略或拆成规格；“镭射银系列LB100-LB101”也必须保留完整编号范围
 
 ### 多规格展开为独立行
 - 同一产品的不同规格变体（不同厚度、粒径、尺寸、颜色等），每种变体单独一行
@@ -109,7 +110,7 @@ export async function handleQuotationParseRequest(req: ApiRequest, res: ApiRespo
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const extraPrompt = customPrompt ? `\n\n用户额外要求：${customPrompt}` : '';
-    const fullPrompt = BASE_INSTRUCTION + extraPrompt;
+    const fullPrompt = BASE_QUOTATION_PARSE_INSTRUCTION + extraPrompt;
     let contents: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
 
     if (isExcel) {

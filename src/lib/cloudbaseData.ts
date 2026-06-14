@@ -328,16 +328,24 @@ export interface ListDocumentsOptions {
 }
 
 export async function listDocuments<T>(collectionName: CollectionName, options?: ListDocumentsOptions): Promise<T[]> {
-  const url = new URL(getDataApiPath(collectionName), typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
-  if (options?.fields?.length) {
-    url.searchParams.set('fields', options.fields.join(','));
+  const pageSize = 1000;
+  const documents: T[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const url = new URL(getDataApiPath(collectionName), typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
+    if (options?.fields?.length) {
+      url.searchParams.set('fields', options.fields.join(','));
+    }
+    if (options?.sizeFields?.length) {
+      url.searchParams.set('sizeFields', options.sizeFields.join(','));
+    }
+    url.searchParams.set('offset', String(offset));
+    url.searchParams.set('limit', String(pageSize));
+    const path = url.pathname + url.search;
+    const response = await fetch(path, { cache: 'no-store' });
+    const page = await readJsonResponse<T[]>(response, collectionName);
+    documents.push(...page);
+    if (page.length < pageSize) return documents;
   }
-  if (options?.sizeFields?.length) {
-    url.searchParams.set('sizeFields', options.sizeFields.join(','));
-  }
-  const path = url.pathname + (url.search ? url.search : '');
-  const response = await fetch(path, { cache: 'no-store' });
-  return readJsonResponse<T[]>(response, collectionName);
 }
 
 export async function getDocument<T>(collectionName: CollectionName, documentId: string): Promise<T | null> {

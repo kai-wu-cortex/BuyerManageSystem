@@ -7,6 +7,7 @@ import {
   getBuyerSystemViewSettingsDocumentId,
   getLatestLedgerBackup,
   isLedgerBackupNewerThanLoaded,
+  listDocuments,
   loadBuyerSystemViewSettings,
   normalizeCloudbaseDocumentId,
   setDocument,
@@ -130,5 +131,24 @@ await assert.rejects(
   /请求内容过大/,
 );
 globalThis.fetch = originalFetch;
+
+const paginationFetch = globalThis.fetch;
+const requestedOffsets: string[] = [];
+globalThis.fetch = (async (input: string | URL | Request) => {
+  const url = new URL(String(input), 'http://localhost');
+  requestedOffsets.push(url.searchParams.get('offset') ?? '');
+  const offset = Number(url.searchParams.get('offset') ?? 0);
+  const data = offset === 0
+    ? Array.from({ length: 1000 }, (_, index) => ({ id: `item-${index}` }))
+    : [{ id: 'item-1000' }];
+  return new Response(JSON.stringify({ success: true, data }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}) as typeof fetch;
+const paginatedDocuments = await listDocuments<{ id: string }>('supplier_quotation_items');
+assert.equal(paginatedDocuments.length, 1001, 'listDocuments should load every page instead of truncating at 1000 records');
+assert.deepEqual(requestedOffsets, ['0', '1000']);
+globalThis.fetch = paginationFetch;
 
 console.log('cloudbaseData tests passed ✅');

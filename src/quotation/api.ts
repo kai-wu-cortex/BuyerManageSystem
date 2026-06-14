@@ -29,10 +29,21 @@ export async function loadQuotationWorkspace(): Promise<QuotationWorkspace> {
   return { quotations, items, suppliers };
 }
 
-export async function saveQuotationDraft(draft: QuotationDraft): Promise<void> {
+export async function saveQuotationDraft(
+  draft: QuotationDraft,
+  previousItems: SupplierQuotationItem[] = [],
+): Promise<void> {
+  const now = new Date().toISOString();
+  const nextItemIds = new Set(draft.items.map(item => item.id));
+  const staleItems = previousItems.filter(item => !nextItemIds.has(item.id) && !item.deletedAt);
   await Promise.all([
     setDocument(cloudbaseCollections.supplierQuotations, draft.quotation.id, draft.quotation),
     ...draft.items.map(item => setDocument(cloudbaseCollections.supplierQuotationItems, item.id, item)),
+    ...staleItems.map(item => setDocument(
+      cloudbaseCollections.supplierQuotationItems,
+      item.id,
+      { deletedAt: now, updatedAt: now },
+    )),
   ]);
 }
 

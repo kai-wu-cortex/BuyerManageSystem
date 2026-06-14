@@ -25,8 +25,6 @@ import {
   parseQuotationFile,
   saveQuotationDraft,
   saveSupplierProfile,
-  setDocument,
-  cloudbaseCollections,
   type QuotationWorkspace,
 } from '../../quotation/api';
 import type {
@@ -219,21 +217,23 @@ function PreviewPanel({
     setMessage('');
     try {
       const now = new Date().toISOString();
-      await Promise.all([
-        setDocument(cloudbaseCollections.supplierQuotations, quotation.id, {
-          ...quotation,
-          quotationNumber: editNumber,
-          currency: editCurrency.toUpperCase(),
-          taxRate: editTaxRate,
-          status: editStatus,
-          summary: editSummary,
-          smartFields: customColumns,
-          updatedAt: now,
-        }),
-        ...editItems.map(item =>
-          setDocument(cloudbaseCollections.supplierQuotationItems, item.id, { ...item, updatedAt: now })
-        ),
-      ]);
+      const updatedQuotation = {
+        ...quotation,
+        quotationNumber: editNumber,
+        currency: editCurrency.toUpperCase(),
+        taxRate: editTaxRate,
+        status: editStatus,
+        summary: editSummary,
+        smartFields: customColumns,
+        updatedAt: now,
+      };
+      await saveQuotationDraft(
+        {
+          quotation: updatedQuotation,
+          items: editItems.map(item => ({ ...item, updatedAt: now, deletedAt: null })),
+        },
+        items,
+      );
       setMessage('已保存');
       await onSaved();
     } catch (err) {
