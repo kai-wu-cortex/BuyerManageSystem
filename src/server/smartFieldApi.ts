@@ -83,7 +83,11 @@ export async function handleSmartFieldExtractRequest(req: ApiRequest, res: ApiRe
       contents = { parts: [{ text: `以下是Excel报价单内容：\n\n${textData}\n\n${instruction}` }] };
     } else {
       const base64 = Buffer.from(await new Response(blob.stream).arrayBuffer()).toString('base64');
-      contents = { parts: [{ text: instruction }, { inlineData: { mimeType, data: base64 } }] };
+      const isImage = mimeType.startsWith('image/');
+      const imageNote = isImage
+        ? '这是一张报价单的图片。请先用OCR识别图片中的文字内容，然后根据提示词提取每个产品对应的数据。\n\n'
+        : '';
+      contents = { parts: [{ text: imageNote + instruction }, { inlineData: { mimeType, data: base64 } }] };
     }
 
     const response = await ai.models.generateContent({

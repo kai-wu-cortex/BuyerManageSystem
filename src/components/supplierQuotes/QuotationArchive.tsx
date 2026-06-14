@@ -136,6 +136,54 @@ function makeDraft(
   return { draft: { quotation, items }, supplier };
 }
 
+function EditableHeaderText({ name, onRename }: { name: string; onRename: (old: string, new_: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+
+  if (editing) {
+    return (
+      <input
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { onRename(name, value); setEditing(false); } if (e.key === 'Escape') setEditing(false); }}
+        onBlur={() => { onRename(name, value); setEditing(false); }}
+        className="w-full bg-transparent text-[11px] font-semibold text-purple-600 outline-none"
+        autoFocus
+      />
+    );
+  }
+
+  return <button type="button" onClick={() => setEditing(true)} className="hover:underline cursor-pointer">{name}</button>;
+}
+
+function SmartColumnTag({ name, onRename, onRemove }: { name: string; onRename: (old: string, new_: string) => void; onRemove: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+
+  if (editing) {
+    return (
+      <span className="flex items-center gap-1 rounded-full border border-purple-300 bg-white px-2 py-0.5">
+        <input
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { onRename(name, value); setEditing(false); } if (e.key === 'Escape') setEditing(false); }}
+          onBlur={() => { onRename(name, value); setEditing(false); }}
+          className="w-24 bg-transparent text-[10px] font-medium text-purple-700 outline-none"
+          autoFocus
+        />
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700">
+      <Sparkles className="h-2.5 w-2.5" />
+      <button type="button" onClick={() => setEditing(true)} className="hover:underline">{name}</button>
+      <button type="button" onClick={() => onRemove(name)} className="ml-0.5 text-purple-400 hover:text-purple-600">&times;</button>
+    </span>
+  );
+}
+
 function PreviewPanel({
   quotation,
   items,
@@ -232,6 +280,26 @@ function PreviewPanel({
       const next = { ...prev };
       delete next[colName];
       return next;
+    });
+  };
+
+  const renameSmartColumn = (oldName: string, newName: string) => {
+    if (!newName.trim() || oldName === newName) return;
+    setCustomColumns(prev => {
+      const next = { ...prev };
+      const values = next[oldName];
+      delete next[oldName];
+      next[newName.trim()] = values;
+      return next;
+    });
+  };
+
+  const updateSmartCellValue = (colName: string, index: number, value: string) => {
+    setCustomColumns(prev => {
+      const values = [...(prev[colName] ?? [])];
+      while (values.length <= index) values.push('');
+      values[index] = value;
+      return { ...prev, [colName]: values };
     });
   };
 
@@ -407,9 +475,8 @@ function PreviewPanel({
               {customColNames.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {customColNames.map(name => (
-                    <span key={name} className="flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700">
-                      <Sparkles className="h-2.5 w-2.5" />{name}
-                      <button type="button" onClick={() => removeSmartColumn(name)} className="ml-0.5 text-purple-400 hover:text-purple-600">&times;</button>
+                    <span key={name}>
+                      <SmartColumnTag name={name} onRename={renameSmartColumn} onRemove={removeSmartColumn} />
                     </span>
                   ))}
                 </div>
@@ -482,7 +549,7 @@ function PreviewPanel({
                 <th className="px-2 py-2 text-left font-semibold text-slate-500">单位</th>
                 <th className="px-2 py-2 text-left font-semibold text-slate-500">包装数</th>
                 <th className="px-2 py-2 text-left font-semibold text-slate-500">单价</th>
-                {customColNames.map(name => <th key={name} className="px-2 py-2 text-left font-semibold text-purple-600">{name}</th>)}
+                {customColNames.map(name => <th key={name} className="px-2 py-2 text-left font-semibold text-purple-600"><EditableHeaderText name={name} onRename={renameSmartColumn} /></th>)}
                 <th className="px-2 py-2 w-8"></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100">
@@ -494,7 +561,7 @@ function PreviewPanel({
                     <td className="px-1 py-1"><input value={item.sourceUnit} onChange={e => updateItemField(index, 'sourceUnit', e.target.value)} className="w-16 rounded border border-slate-200 px-2 py-1 text-xs" /></td>
                     <td className="px-1 py-1"><input type="number" value={item.sourcePackageQuantity ?? ''} onChange={e => updateItemField(index, 'sourcePackageQuantity', e.target.value === '' ? null : Number(e.target.value))} className="w-20 rounded border border-slate-200 px-2 py-1 text-xs" /></td>
                     <td className="px-1 py-1"><input type="number" value={item.sourceUnitPrice ?? ''} onChange={e => updateItemField(index, 'sourceUnitPrice', e.target.value === '' ? null : Number(e.target.value))} className="w-24 rounded border border-slate-200 px-2 py-1 text-xs" /></td>
-                    {customColNames.map(name => <td key={name} className="px-2 py-1.5 text-purple-700">{customColumns[name]?.[index] || '-'}</td>)}
+                    {customColNames.map(name => <td key={name} className="px-1 py-1"><input value={customColumns[name]?.[index] ?? ''} onChange={e => updateSmartCellValue(name, index, e.target.value)} className="w-24 rounded border border-purple-200 px-2 py-1 text-xs text-purple-700" /></td>)}
                     <td className="px-1 py-1"><button type="button" onClick={() => removeRow(index)} className="p-1 text-slate-400 hover:text-red-500"><Trash2 className="h-3 w-3" /></button></td>
                   </tr>
                 ))}
