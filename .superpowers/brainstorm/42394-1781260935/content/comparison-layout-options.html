@@ -1,0 +1,83 @@
+<h2>产品比价页：布局选择</h2>
+<p class="subtitle">示例已统一为人民币、含税、每个；报价版本由用户勾选。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#f8fafc">
+      <div style="display:flex;gap:7px;margin-bottom:8px">
+        <input class="mock-input" value="瓦楞纸箱 600×400×350" style="flex:1">
+        <button class="mock-button">选择报价版本</button>
+      </div>
+      <div style="overflow:hidden;border:1px solid #cbd5e1;background:white;border-radius:7px;font-size:10px">
+        <div style="display:grid;grid-template-columns:90px repeat(3,1fr);background:#e2e8f0;padding:7px;font-weight:bold">
+          <span>比较项</span><span>华东包装</span><span>恒信材料</span><span>新源包装</span>
+        </div>
+        <div style="display:grid;grid-template-columns:90px repeat(3,1fr);padding:7px;border-top:1px solid #eee">
+          <b>标准单价</b><span style="color:#059669;font-weight:bold">¥4.72 最低</span><span>¥4.85</span><span>¥5.10</span>
+        </div>
+        <div style="display:grid;grid-template-columns:90px repeat(3,1fr);padding:7px;border-top:1px solid #eee">
+          <b>MOQ / 交期</b><span>500 / 7天</span><span>300 / 10天</span><span>1000 / 5天</span>
+        </div>
+        <div style="display:grid;grid-template-columns:90px repeat(3,1fr);padding:7px;border-top:1px solid #eee">
+          <b>付款 / 有效期</b><span>月结30 / 06-30</span><span>现款 / 07-15</span><span>月结60 / 06-25</span>
+        </div>
+        <div style="display:grid;grid-template-columns:90px repeat(3,1fr);padding:7px;border-top:1px solid #eee">
+          <b>供应商评分</b><span>质量 90 · 交期 86</span><span>质量 94 · 交期 91</span><span>质量 82 · 交期 88</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 横向矩阵（推荐）</h3>
+      <p>比较项固定在左侧，供应商按列排列，差异最直观；供应商很多时可横向滚动。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#f8fafc">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px">
+        <div style="background:white;border:2px solid #10b981;border-radius:7px;padding:8px">
+          <b>华东包装</b><h3 style="margin:7px 0;color:#059669">¥4.72</h3>
+          <div>MOQ 500</div><div>交期 7天</div><div>月结30天</div><hr><div>质量 90</div><div>交期 86</div>
+        </div>
+        <div style="background:white;border:1px solid #cbd5e1;border-radius:7px;padding:8px">
+          <b>恒信材料</b><h3 style="margin:7px 0">¥4.85</h3>
+          <div>MOQ 300</div><div>交期 10天</div><div>现款</div><hr><div>质量 94</div><div>交期 91</div>
+        </div>
+        <div style="background:white;border:1px solid #cbd5e1;border-radius:7px;padding:8px">
+          <b>新源包装</b><h3 style="margin:7px 0">¥5.10</h3>
+          <div>MOQ 1000</div><div>交期 5天</div><div>月结60天</div><hr><div>质量 82</div><div>交期 88</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 供应商卡片</h3>
+      <p>阅读单个供应商条件轻松，适合少量候选；逐行找差异不如矩阵高效。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#f8fafc">
+      <div style="display:grid;grid-template-columns:44% 56%;gap:8px">
+        <div style="background:white;border:1px solid #cbd5e1;border-radius:7px;padding:9px">
+          <b>价格趋势</b>
+          <div style="height:120px;position:relative;margin-top:10px;border-left:1px solid #94a3b8;border-bottom:1px solid #94a3b8">
+            <div style="position:absolute;left:8%;top:75%;width:82%;height:2px;background:#10b981;transform:rotate(-8deg)"></div>
+            <div style="position:absolute;left:8%;top:47%;width:82%;height:2px;background:#3b82f6;transform:rotate(4deg)"></div>
+            <div style="position:absolute;left:8%;top:22%;width:82%;height:2px;background:#f59e0b;transform:rotate(10deg)"></div>
+          </div>
+          <div style="margin-top:8px">近 6 个月历史报价走势</div>
+        </div>
+        <div style="background:white;border:1px solid #cbd5e1;border-radius:7px;padding:9px">
+          <b>当前候选</b>
+          <div style="margin-top:9px;padding:7px;background:#ecfdf5">华东包装　¥4.72　评分 87</div>
+          <div style="margin-top:6px;padding:7px;background:#f8fafc">恒信材料　¥4.85　评分 92</div>
+          <div style="margin-top:6px;padding:7px;background:#f8fafc">新源包装　¥5.10　评分 84</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 趋势分析型</h3>
+      <p>兼顾历史价格走势和当前候选，适合采购分析；商务条款详情需要二次展开。</p>
+    </div>
+  </div>
+</div>

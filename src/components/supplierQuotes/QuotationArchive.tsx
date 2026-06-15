@@ -1,7 +1,8 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Building2,
+  Calendar,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
@@ -9,6 +10,8 @@ import {
   FileSpreadsheet,
   FileText,
   Image,
+  LayoutGrid,
+  List,
   Loader2,
   Plus,
   RefreshCw,
@@ -789,6 +792,160 @@ function ExcelPreview({ pathname }: { pathname: string }) {
   );
 }
 
+/**
+ * 卡片中的报价单 mini 预览器：
+ * - 图片：缩略图
+ * - PDF：iframe 缩放显示首页
+ * - Excel：渲染前 8 行 4 列简表
+ * - 手动录入 / 无文件：用解析后的明细前几行作为预览
+ */
+function MiniFilePreview({
+  pathname, fileName, mimeType,
+  fallbackItems,
+}: {
+  pathname: string;
+  fileName: string;
+  mimeType: string;
+  fallbackItems: SupplierQuotationItem[];
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [excelRows, setExcelRows] = useState<unknown[][] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [errored, setErrored] = useState(false);
+
+  const isImage = mimeType.startsWith('image/');
+  const isPdf = mimeType === 'application/pdf';
+  const isExcel = mimeType.includes('spreadsheet') || mimeType.includes('ms-excel')
+    || fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
+  const hasRealFile = Boolean(pathname);
+
+  useEffect(() => {
+    if (!hasRealFile) { setLoading(false); return; }
+    let cancelled = false;
+    let createdUrl: string | null = null;
+    const url = `/api/quotation/file?pathname=${encodeURIComponent(pathname)}`;
+
+    if (isExcel) {
+      fetch(url, { cache: 'no-store' })
+        .then(async res => {
+          if (!res.ok) throw new Error('load fail');
+          const XLSX = await import('xlsx');
+          const wb = XLSX.read(await res.arrayBuffer(), { type: 'array' });
+          const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], {
+            header: 1, raw: false, blankrows: false,
+          }).slice(0, 8);
+          if (!cancelled) { setExcelRows(rows); setLoading(false); }
+        })
+        .catch(() => { if (!cancelled) { setErrored(true); setLoading(false); } });
+    } else if (isImage || isPdf) {
+      fetch(url, { cache: 'no-store' })
+        .then(async res => {
+          if (!res.ok) throw new Error('load fail');
+          const blob = await res.blob();
+          createdUrl = URL.createObjectURL(blob);
+          if (!cancelled) { setBlobUrl(createdUrl); setLoading(false); }
+        })
+        .catch(() => { if (!cancelled) { setErrored(true); setLoading(false); } });
+    } else {
+      setLoading(false);
+    }
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [pathname, isExcel, isImage, isPdf, hasRealFile]);
+
+  // 没有真实文件，或加载失败：用结构化明细做兜底预览
+  if (!hasRealFile || errored) {
+    const previewItems = fallbackItems.slice(0, 5);
+    if (previewItems.length === 0) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-1 bg-slate-50 text-slate-400">
+          <FileText className="h-6 w-6" />
+          <span className="text-[10px]">无预览</span>
+        </div>
+      );
+    }
+    return (
+      <div className="h-full overflow-hidden bg-white p-2">
+        <div className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase text-slate-400">
+          <ClipboardList className="h-3 w-3" /> 明细预览
+        </div>
+        <table className="w-full text-[9px]">
+          <tbody>
+            {previewItems.map(item => (
+              <tr key={item.id} className="border-b border-slate-50 last:border-0">
+                <td className="py-0.5 pr-1 text-slate-700 truncate max-w-[120px]">{item.sourceProductName || '-'}</td>
+                <td className="py-0.5 text-right font-mono font-semibold text-blue-600">
+                  {item.sourceUnitPrice !== null ? Number(item.sourceUnitPrice).toFixed(2) : '-'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center bg-slate-50">
+        <Loader2 className="h-5 w-5 animate-spin text-blue-400" />
+      </div>
+    );
+  }
+
+  if (isImage && blobUrl) {
+    return (
+      <div className="h-full w-full overflow-hidden bg-slate-100">
+        <img src={blobUrl} alt={fileName} className="h-full w-full object-cover" loading="lazy" />
+      </div>
+    );
+  }
+
+  if (isPdf && blobUrl) {
+    return (
+      <div className="relative h-full w-full overflow-hidden bg-slate-100">
+        <iframe
+          src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+          title={fileName}
+          className="pointer-events-none h-[280%] w-[280%] origin-top-left scale-[0.36] border-0"
+        />
+        <div className="absolute right-1 top-1 rounded bg-white/90 px-1.5 py-0.5 text-[9px] font-semibold text-red-600 shadow-sm">PDF</div>
+      </div>
+    );
+  }
+
+  if (isExcel && excelRows) {
+    const columnCount = Math.min(4, excelRows.reduce((max, row) => Math.max(max, row.length), 0));
+    return (
+      <div className="h-full overflow-hidden bg-white p-1">
+        <table className="w-full border-collapse text-[8px]">
+          <tbody>
+            {excelRows.map((row, ri) => (
+              <tr key={ri}>
+                {Array.from({ length: columnCount }, (_, ci) => (
+                  <td key={ci} className={`max-w-[60px] truncate border border-slate-100 px-1 py-0.5 align-top ${ri === 0 ? 'bg-slate-50 font-bold text-slate-700' : 'text-slate-500'}`}>
+                    {String(row[ci] ?? '')}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-1 bg-slate-50 text-slate-400">
+      <FileText className="h-6 w-6" />
+      <span className="text-[10px]">{fileName.split('.').pop()?.toUpperCase() || '文件'}</span>
+    </div>
+  );
+}
+
 export default function QuotationArchive({ workspace, loading, onRefresh, initialPreviewId, onPreviewClosed, onFilePreview }: Props) {
   const [status, setStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -800,6 +957,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [previewQuotationId, setPreviewQuotationId] = useState<string | null>(initialPreviewId ?? null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'card'>('list');
   // ===== 手动录入模式状态 =====
   const [uploadMode, setUploadMode] = useState<'file' | 'manual'>('file');
   const [manualSupplierName, setManualSupplierName] = useState('');
@@ -1034,6 +1192,25 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
             <option value="expired">已过期</option>
             <option value="voided">已作废</option>
           </select>
+          {/* 视图切换 */}
+          <div className="ml-auto flex overflow-hidden rounded-lg border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={`flex items-center gap-1 px-3 py-2 text-[11px] font-semibold transition-colors ${viewMode === 'list' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}
+              title="列表视图"
+            >
+              <List className="h-3.5 w-3.5" /> 列表
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('card')}
+              className={`flex items-center gap-1 px-3 py-2 text-[11px] font-semibold transition-colors ${viewMode === 'card' ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'}`}
+              title="卡片视图"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" /> 卡片
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1044,41 +1221,128 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16"><Loader2 className="h-6 w-6 animate-spin text-blue-500" /><p className="text-xs text-slate-500">加载中...</p></div>
+      {viewMode === 'list' && (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-16"><Loader2 className="h-6 w-6 animate-spin text-blue-500" /><p className="text-xs text-slate-500">加载中...</p></div>
+          ) : (
+            <table className="min-w-[800px] w-full">
+              <thead><tr className="border-b border-slate-200 bg-slate-50">
+                {['报价单号', '供应商', '源文件', '日期', '状态', '简述', '操作'].map(label => <th key={label} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 last:text-right">{label}</th>)}
+              </tr></thead>
+              <tbody className="divide-y divide-slate-100">
+                {quotations.map(quotation => {
+                  const displayStatus = deriveQuotationDisplayStatus(quotation.status, quotation.validUntil);
+                  return (
+                    <tr key={quotation.id} className="cursor-pointer hover:bg-blue-50/50" onClick={() => setPreviewQuotationId(quotation.id)}>
+                      <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-600">{quotation.quotationNumber || quotation.id}</td>
+                      <td className="px-4 py-3"><span className="flex items-center gap-2 text-xs font-medium text-slate-700"><Building2 className="h-4 w-4 text-slate-400" />{supplierMap.get(quotation.supplierId)?.name || '-'}</span></td>
+                      <td className="px-4 py-3"><div className="flex items-center gap-2">{getFileIcon(quotation.sourceFile.mimeType)}<div><p className="max-w-[160px] truncate text-xs text-slate-700">{quotation.sourceFile.fileName}</p><p className="text-[10px] text-slate-400">{formatFileSize(quotation.sourceFile.size)}</p></div></div></td>
+                      <td className="px-4 py-3 text-xs text-slate-600">{formatDate(quotation.quotationDate)}</td>
+                      <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusColor(displayStatus)}`}>{getStatusLabel(displayStatus)}</span></td>
+                      <td className="px-4 py-3 max-w-[200px]"><p className="truncate text-xs text-slate-500">{quotation.summary || '-'}</p></td>
+                      <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button type="button" onClick={() => onFilePreview?.({ pathname: quotation.sourceFile.pathname, fileName: quotation.sourceFile.fileName, mimeType: quotation.sourceFile.mimeType })} className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></button>
+                          <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                            {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          {!loading && quotations.length === 0 && <div className="py-16 text-center text-sm text-slate-500">暂无报价单数据</div>}
+        </div>
+      )}
+
+      {viewMode === 'card' && (
+        loading ? (
+          <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-blue-500" /><p className="text-xs text-slate-500">加载中...</p>
+          </div>
+        ) : quotations.length === 0 ? (
+          <div className="rounded-xl border border-slate-200 bg-white py-16 text-center text-sm text-slate-500">暂无报价单数据</div>
         ) : (
-          <table className="min-w-[800px] w-full">
-            <thead><tr className="border-b border-slate-200 bg-slate-50">
-              {['报价单号', '供应商', '源文件', '日期', '状态', '简述', '操作'].map(label => <th key={label} className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 last:text-right">{label}</th>)}
-            </tr></thead>
-            <tbody className="divide-y divide-slate-100">
-              {quotations.map(quotation => {
-                const displayStatus = deriveQuotationDisplayStatus(quotation.status, quotation.validUntil);
-                return (
-                  <tr key={quotation.id} className="cursor-pointer hover:bg-blue-50/50" onClick={() => setPreviewQuotationId(quotation.id)}>
-                    <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-600">{quotation.quotationNumber || quotation.id}</td>
-                    <td className="px-4 py-3"><span className="flex items-center gap-2 text-xs font-medium text-slate-700"><Building2 className="h-4 w-4 text-slate-400" />{supplierMap.get(quotation.supplierId)?.name || '-'}</span></td>
-                    <td className="px-4 py-3"><div className="flex items-center gap-2">{getFileIcon(quotation.sourceFile.mimeType)}<div><p className="max-w-[160px] truncate text-xs text-slate-700">{quotation.sourceFile.fileName}</p><p className="text-[10px] text-slate-400">{formatFileSize(quotation.sourceFile.size)}</p></div></div></td>
-                    <td className="px-4 py-3 text-xs text-slate-600">{formatDate(quotation.quotationDate)}</td>
-                    <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${getStatusColor(displayStatus)}`}>{getStatusLabel(displayStatus)}</span></td>
-                    <td className="px-4 py-3 max-w-[200px]"><p className="truncate text-xs text-slate-500">{quotation.summary || '-'}</p></td>
-                    <td className="px-4 py-3 text-right" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
-                        <button type="button" onClick={() => onFilePreview?.({ pathname: quotation.sourceFile.pathname, fileName: quotation.sourceFile.fileName, mimeType: quotation.sourceFile.mimeType })} className="rounded p-1.5 text-slate-400 hover:bg-blue-50 hover:text-blue-600"><Eye className="h-4 w-4" /></button>
-                        <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
-                          {deletingId === quotation.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-        {!loading && quotations.length === 0 && <div className="py-16 text-center text-sm text-slate-500">暂无报价单数据</div>}
-      </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {quotations.map(quotation => {
+              const displayStatus = deriveQuotationDisplayStatus(quotation.status, quotation.validUntil);
+              const cardItems = workspace.items.filter(i => i.quotationId === quotation.id && !i.deletedAt);
+              const supplier = supplierMap.get(quotation.supplierId);
+              return (
+                <div
+                  key={quotation.id}
+                  onClick={() => setPreviewQuotationId(quotation.id)}
+                  className="group cursor-pointer overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md"
+                >
+                  {/* Mini preview */}
+                  <div className="relative h-40 w-full overflow-hidden border-b border-slate-100 bg-slate-50">
+                    <MiniFilePreview
+                      pathname={quotation.sourceFile.pathname}
+                      fileName={quotation.sourceFile.fileName}
+                      mimeType={quotation.sourceFile.mimeType}
+                      fallbackItems={cardItems}
+                    />
+                    <span className={`absolute left-2 top-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold shadow-sm ${getStatusColor(displayStatus)}`}>
+                      {getStatusLabel(displayStatus)}
+                    </span>
+                    {quotation.sourceFile.pathname && (
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); onFilePreview?.({ pathname: quotation.sourceFile.pathname, fileName: quotation.sourceFile.fileName, mimeType: quotation.sourceFile.mimeType }); }}
+                        className="absolute right-2 top-2 flex items-center gap-1 rounded-md bg-white/95 px-2 py-1 text-[10px] font-semibold text-slate-600 opacity-0 shadow-sm transition-opacity hover:bg-white group-hover:opacity-100"
+                      >
+                        <Eye className="h-3 w-3" /> 全屏
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Body */}
+                  <div className="p-3">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <p className="font-mono text-[11px] font-semibold text-blue-600 truncate">{quotation.quotationNumber || quotation.id}</p>
+                      <span className="text-[10px] text-slate-400 shrink-0">{quotation.currency}</span>
+                    </div>
+                    <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                      <Building2 className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      <span className="truncate">{supplier?.name || '-'}</span>
+                    </div>
+                    <div className="mb-2 flex items-center gap-1.5 text-[11px] text-slate-500">
+                      <Calendar className="h-3 w-3 shrink-0 text-slate-400" />
+                      <span>{formatDate(quotation.quotationDate)}</span>
+                      <span className="ml-auto flex items-center gap-1">
+                        {getFileIcon(quotation.sourceFile.mimeType)}
+                        <span className="text-[10px]">{cardItems.length} 条</span>
+                      </span>
+                    </div>
+                    {quotation.summary && (
+                      <p className="line-clamp-2 text-[11px] leading-relaxed text-slate-500">{quotation.summary}</p>
+                    )}
+                  </div>
+
+                  {/* Actions footer */}
+                  <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-3 py-2" onClick={e => e.stopPropagation()}>
+                    <span className="text-[10px] text-slate-400 truncate" title={quotation.sourceFile.fileName}>
+                      {quotation.sourceFile.fileName}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button type="button" onClick={() => setPreviewQuotationId(quotation.id)} className="rounded p-1 text-slate-400 hover:bg-amber-50 hover:text-amber-600" title="查看明细">
+                        <Eye className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => void handleDelete(quotation.id)} disabled={deletingId === quotation.id} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" title="删除">
+                        {deletingId === quotation.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
 
       {/* Upload modal */}
       {showUpload && (
