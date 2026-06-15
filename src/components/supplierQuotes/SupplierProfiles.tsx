@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Building2, Check, Eye, Mail, Phone, Pencil, Save, Star, Trash2, TrendingUp, User, X } from 'lucide-react';
+import { Building2, Eye, Mail, Phone, Pencil, Save, Star, Trash2, TrendingUp, User, X } from 'lucide-react';
 import { deleteSupplier, saveSupplierProfile } from '../../quotation/api';
 import { deriveQuotationDisplayStatus } from '../../quotation/normalization';
 import type { SupplierProfile, SupplierQuotation, SupplierQuotationItem } from '../../quotation/types';
@@ -28,7 +28,6 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
 
   useEffect(() => {
     if (!visibleSuppliers.find(s => s.id === selectedId)) setSelectedId(visibleSuppliers[0]?.id ?? '');
@@ -36,7 +35,6 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
   useEffect(() => {
     setDraft(selected ?? null);
     setEditingName(false);
-    setNameDraft(selected?.name ?? '');
   }, [selected]);
 
   if (!draft) return <div className="p-12 text-center text-sm text-slate-500">上传报价单后会自动建立供应商档案。</div>;
@@ -52,35 +50,32 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
   ] as const;
 
   const save = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      const now = new Date().toISOString();
-      await saveSupplierProfile({ ...draft, scoreUpdatedAt: now, updatedAt: now });
-      await onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  };
+    if (!draft) return;
+    const trimmedName = draft.name.trim();
+    if (!trimmedName) { setError('供应商名称不能为空。'); return; }
 
-  const commitNameEdit = async () => {
-    const trimmed = nameDraft.trim();
-    if (!trimmed) { setEditingName(false); setNameDraft(draft.name); return; }
-    if (trimmed === draft.name) { setEditingName(false); return; }
-    // 命名冲突检查：同一规范化名称的其他未删除供应商
-    const normalized = normalizeSupplierName(trimmed);
-    const conflict = visibleSuppliers.find(s => s.id !== draft.id && normalizeSupplierName(s.name) === normalized);
-    if (conflict) {
-      setError(`供应商名称与已有 "${conflict.name}" 冲突，无法重名。`);
-      return;
+    // 名称变化时做去重检查，并刷新 normalizedName
+    const normalizedName = normalizeSupplierName(trimmedName);
+    const original = visibleSuppliers.find(s => s.id === draft.id);
+    if (original && normalizedName !== original.normalizedName) {
+      const conflict = visibleSuppliers.find(s => s.id !== draft.id && s.normalizedName === normalizedName);
+      if (conflict) {
+        setError(`供应商名称与已有 "${conflict.name}" 冲突，无法重名。`);
+        return;
+      }
     }
+
     setSaving(true);
     setError(null);
     try {
       const now = new Date().toISOString();
-      const next: SupplierProfile = { ...draft, name: trimmed, normalizedName: normalized, updatedAt: now };
+      const next: SupplierProfile = {
+        ...draft,
+        name: trimmedName,
+        normalizedName,
+        scoreUpdatedAt: now,
+        updatedAt: now,
+      };
       await saveSupplierProfile(next);
       setDraft(next);
       setEditingName(false);
@@ -143,18 +138,19 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
                   <>
                     <input
                       autoFocus
-                      value={nameDraft}
-                      onChange={e => setNameDraft(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') void commitNameEdit(); if (e.key === 'Escape') { setEditingName(false); setNameDraft(draft.name); } }}
+                      value={draft.name}
+                      onChange={e => setDraft(current => current ? { ...current, name: e.target.value } : current)}
+                      onKeyDown={e => { if (e.key === 'Enter') { setEditingName(false); void save(); } if (e.key === 'Escape') { setEditingName(false); setDraft(selected ?? null); } }}
+                      placeholder="供应商名称"
                       className="w-72 rounded border border-blue-300 px-2 py-1 text-lg font-bold text-slate-800 outline-none focus:border-blue-500"
                     />
-                    <button type="button" disabled={saving} onClick={() => void commitNameEdit()} className="rounded p-1 text-emerald-500 hover:bg-emerald-50 disabled:opacity-40"><Check className="h-4 w-4" /></button>
-                    <button type="button" disabled={saving} onClick={() => { setEditingName(false); setNameDraft(draft.name); }} className="rounded p-1 text-slate-400 hover:bg-slate-50 disabled:opacity-40"><X className="h-4 w-4" /></button>
+                    <span className="rounded bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">编辑中（点右侧"保存资料"提交）</span>
+                    <button type="button" disabled={saving} onClick={() => { setEditingName(false); setDraft(selected ?? null); }} className="rounded p-1 text-slate-400 hover:bg-slate-50 disabled:opacity-40" title="取消编辑"><X className="h-4 w-4" /></button>
                   </>
                 ) : (
                   <>
                     <h1 className="text-lg font-bold text-slate-800">{draft.name}</h1>
-                    <button type="button" onClick={() => { setNameDraft(draft.name); setEditingName(true); }} className="rounded p-1 text-slate-400 hover:bg-blue-50 hover:text-blue-600" title="编辑供应商名称"><Pencil className="h-3.5 w-3.5" /></button>
+                    <button type="button" onClick={() => setEditingName(true)} className="rounded p-1 text-slate-400 hover:bg-blue-50 hover:text-blue-600" title="编辑供应商名称"><Pencil className="h-3.5 w-3.5" /></button>
                     <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">已建档</span>
                   </>
                 )}
