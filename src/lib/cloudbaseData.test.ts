@@ -7,8 +7,10 @@ import {
   getBuyerSystemViewSettingsDocumentId,
   getLatestLedgerBackup,
   isLedgerBackupNewerThanLoaded,
+  LedgerBackupIncompleteError,
   listDocuments,
   loadBuyerSystemViewSettings,
+  loadLatestCompleteLedgerBackup,
   loadLedgerBackupOrders,
   normalizeCloudbaseDocumentId,
   setDocument,
@@ -199,9 +201,75 @@ await assert.rejects(
     orderCount: 2,
     chunkCount: 2,
   }),
-  /分块加载不完整/,
+  (err: unknown) => err instanceof LedgerBackupIncompleteError && err.backupId === 'backup-1' && err.missingChunks === 1,
   'partial backup chunks must never be treated as a complete ledger',
 );
 globalThis.fetch = incompleteChunkFetch;
+
+// === loadLatestCompleteLedgerBackup: 自动跳过损坏备份 ===
+
+const fallbackFetch = globalThis.fetch;
+globalThis.fetch = (async (input: string | URL | Request) => {
+  const url = String(input);
+  // newest backup (backup-broken) 缺一个 chunk → 不完整
+  if (url.endsWith('/ledger_backup_chunks/backup-broken_chunk_0000')) {
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        id: 'backup-broken_chunk_0000', backupId: 'backup-broken',
+        chunkIndex: 0, orders: [makeOrder('001')],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+  if (url.endsWith('/ledger_backup_chunks/backup-broken_chunk_0001')) {
+    return new Response(JSON.stringify({ success: false, message: 'gone' }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } });
+  }
+  // older backup (backup-good) 完整两个 chunks
+  if (url.endsWith('/ledger_backup_chunks/backup-good_chunk_0000')) {
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        id: 'backup-good_chunk_0000', backupId: 'backup-good',
+        chunkIndex: 0, orders: [makeOrder('A1')],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+  if (url.endsWith('/ledger_backup_chunks/backup-good_chunk_0001')) {
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        id: 'backup-good_chunk_0001', backupId: 'backup-good',
+        chunkIndex: 1, orders: [makeOrder('A2')],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+  return new Response('not found', { status: 404 });
+}) as typeof fetch;
+
+const fallbackResult = await loadLatestCompleteLedgerBackup([
+  { id: 'backup-broken', name: 'broken', timeCreated: '2026-06-15', rawTime: 1500, size: 1, orderCount: 2, chunkCount: 2 },
+  { id: 'backup-good', name: 'good', timeCreated: '2026-06-14', rawTime: 1400, size: 1, orderCount: 2, chunkCount: 2 },
+]);
+assert.ok(fallbackResult, '应该能回退到完整备份');
+assert.equal(fallbackResult!.backup.id, 'backup-good', '损坏的 newest 被跳过，回退到旧的 good');
+assert.equal(fallbackResult!.orders.length, 2);
+assert.equal(fallbackResult!.skipped.length, 1);
+assert.equal(fallbackResult!.skipped[0].id, 'backup-broken');
+globalThis.fetch = fallbackFetch;
+
+// 全部损坏时返回 null
+const allBrokenFetch = globalThis.fetch;
+globalThis.fetch = (async () => new Response(JSON.stringify({ success: false, message: 'gone' }),
+  { status: 503, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+const allBroken = await loadLatestCompleteLedgerBackup([
+  { id: 'b1', name: 'b1', timeCreated: 't1', rawTime: 100, size: 1, orderCount: 1, chunkCount: 1 },
+]);
+assert.equal(allBroken, null, '所有备份都损坏时返回 null');
+globalThis.fetch = allBrokenFetch;
+
+// 空备份列表 → null
+const emptyResult = await loadLatestCompleteLedgerBackup([]);
+assert.equal(emptyResult, null);
 
 console.log('cloudbaseData tests passed ✅');

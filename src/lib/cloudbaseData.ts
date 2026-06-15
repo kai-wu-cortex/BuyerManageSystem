@@ -500,11 +500,61 @@ export function prepareSampleForCloudbaseSync(sample: SampleRecord): SampleRecor
   return prepared;
 }
 
+/**
+ * 写入单个 chunk，失败时最多重试 3 次。
+ * 用于 saveLedgerBackup 的原子性保证：每个 chunk 都必须成功，
+ * 否则整个备份操作失败并回滚。
+ */
+async function writeChunkWithRetry(chunk: LedgerBackupChunk): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await setDocument('ledger_backup_chunks', chunk.id, chunk);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? new Error(`分块 ${chunk.id} 写入失败：${lastError.message}`)
+    : new Error(`分块 ${chunk.id} 写入失败`);
+}
+
 export async function saveLedgerBackup(orders: PurchaseOrder[]): Promise<LedgerBackup> {
   const { backup, chunks } = createLedgerBackupDocuments(orders);
-  await runInChunks(chunks, chunk => setDocument('ledger_backup_chunks', chunk.id, chunk), 6);
-  await setDocument('ledger_backups', backup.id, backup);
-  return backup;
+  const written: string[] = [];
+
+  try {
+    // 顺序写所有 chunks（失败立即抛出，避免 Promise.all 的"前几个已写入但报错"问题）。
+    // 用并发=4 平衡速度与失败时的清理代价。
+    const concurrency = 4;
+    for (let i = 0; i < chunks.length; i += concurrency) {
+      const batch = chunks.slice(i, i + concurrency);
+      const results = await Promise.allSettled(batch.map(chunk => writeChunkWithRetry(chunk)));
+      for (let j = 0; j < results.length; j += 1) {
+        const result = results[j];
+        if (result.status === 'fulfilled') {
+          written.push(batch[j].id);
+        } else {
+          // 当前批次有失败：先把同批次成功的也记录下来，再抛错触发清理
+          for (let k = 0; k < j; k += 1) {
+            if (results[k].status === 'fulfilled') written.push(batch[k].id);
+          }
+          throw result.reason instanceof Error ? result.reason : new Error(String(result.reason));
+        }
+      }
+    }
+
+    // 所有 chunks 成功后才写 metadata，确保 metadata 一旦存在 → chunks 一定齐全
+    await setDocument('ledger_backups', backup.id, backup);
+    return backup;
+  } catch (error) {
+    // 回滚：尽力清理已写入的 chunks（best-effort，失败也不阻塞最终抛错）
+    await Promise.allSettled(
+      written.map(chunkId => deleteDocument('ledger_backup_chunks', chunkId)),
+    );
+    throw error;
+  }
 }
 
 export function createLedgerBackupDocuments(
@@ -557,6 +607,32 @@ export function createLedgerBackupDocuments(
   return { backup, chunks };
 }
 
+export class LedgerBackupIncompleteError extends Error {
+  readonly backupId: string;
+  readonly missingChunks: number;
+  readonly expectedChunks: number;
+  readonly loadedOrderCount: number;
+  readonly expectedOrderCount: number | undefined;
+
+  constructor(params: {
+    backupId: string;
+    missingChunks: number;
+    expectedChunks: number;
+    loadedOrderCount: number;
+    expectedOrderCount: number | undefined;
+  }) {
+    const message = `台账备份 ${params.backupId} 不完整：分块 ${params.expectedChunks - params.missingChunks}/${params.expectedChunks}` +
+      (params.expectedOrderCount !== undefined ? `，订单 ${params.loadedOrderCount}/${params.expectedOrderCount}` : '');
+    super(message);
+    this.name = 'LedgerBackupIncompleteError';
+    this.backupId = params.backupId;
+    this.missingChunks = params.missingChunks;
+    this.expectedChunks = params.expectedChunks;
+    this.loadedOrderCount = params.loadedOrderCount;
+    this.expectedOrderCount = params.expectedOrderCount;
+  }
+}
+
 export async function loadLedgerBackupOrders(backup: LedgerBackup): Promise<PurchaseOrder[] | null> {
   if (Array.isArray(backup.orders)) {
     return backup.orders;
@@ -596,16 +672,79 @@ export async function loadLedgerBackupOrders(backup: LedgerBackup): Promise<Purc
 
   const uniqueChunkIndexes = new Set(validChunks.map(chunk => chunk.chunkIndex));
   if (validChunks.length !== chunkCount || uniqueChunkIndexes.size !== chunkCount) {
-    throw new Error(`台账备份分块加载不完整（${uniqueChunkIndexes.size}/${chunkCount}），已保留当前台账，请刷新后重试。`);
+    throw new LedgerBackupIncompleteError({
+      backupId: backup.id,
+      missingChunks: chunkCount - uniqueChunkIndexes.size,
+      expectedChunks: chunkCount,
+      loadedOrderCount: validChunks.reduce((sum, c) => sum + c.orders.length, 0),
+      expectedOrderCount: backup.orderCount,
+    });
   }
 
   const orders = validChunks
     .sort((a, b) => a.chunkIndex - b.chunkIndex)
     .flatMap(chunk => chunk.orders);
   if (Number.isFinite(backup.orderCount) && backup.orderCount !== undefined && orders.length !== backup.orderCount) {
-    throw new Error(`台账备份订单数不完整（${orders.length}/${backup.orderCount}），已保留当前台账，请刷新后重试。`);
+    throw new LedgerBackupIncompleteError({
+      backupId: backup.id,
+      missingChunks: 0,
+      expectedChunks: chunkCount,
+      loadedOrderCount: orders.length,
+      expectedOrderCount: backup.orderCount,
+    });
   }
   return orders;
+}
+
+/**
+ * 从备份列表里依次尝试加载，遇到不完整的备份自动跳到上一份。
+ * 返回成功加载的 (backup, orders)，全部失败则抛最后一个错误。
+ *
+ * 解决场景：上一次 saveLedgerBackup 部分写入失败导致最新 backup 缺分块，
+ * 用户登录时不应该看到这份残缺数据，而应回退到之前完整的备份。
+ */
+export async function loadLatestCompleteLedgerBackup(
+  backups: LedgerBackup[],
+  resolveFullBackup?: (backup: LedgerBackup) => Promise<LedgerBackup | null>,
+): Promise<{ backup: LedgerBackup; orders: PurchaseOrder[]; skipped: LedgerBackup[] } | null> {
+  const sorted = sortBackupsNewestFirst(backups);
+  const skipped: LedgerBackup[] = [];
+  let lastError: unknown = null;
+
+  for (const summary of sorted) {
+    let backupToLoad = summary;
+    // 摘要模式没有 orders；如果有 chunkCount 说明是新版分块备份，不需要再 fetch 完整文档
+    // 但旧版备份是把 orders 内联写在 backup 文档里，sizeFields 模式下会丢失，需要 resolve
+    if (!Array.isArray(backupToLoad.orders) && !backupToLoad.chunkCount && resolveFullBackup) {
+      try {
+        const full = await resolveFullBackup(summary);
+        if (full) backupToLoad = full;
+      } catch (error) {
+        lastError = error;
+        skipped.push(summary);
+        continue;
+      }
+    }
+
+    try {
+      const orders = await loadLedgerBackupOrders(backupToLoad);
+      if (Array.isArray(orders) && orders.length > 0) {
+        return { backup: backupToLoad, orders, skipped };
+      }
+      // 空备份也算损坏（不应该出现），跳过
+      skipped.push(summary);
+    } catch (error) {
+      lastError = error;
+      skipped.push(summary);
+      console.warn(`Skipping incomplete backup ${summary.id}:`, error instanceof Error ? error.message : error);
+    }
+  }
+
+  if (lastError) {
+    // 所有备份都损坏，返回 null 让调用方按情况处理
+    return null;
+  }
+  return null;
 }
 
 export function sortBackupsNewestFirst(backups: LedgerBackup[]): LedgerBackup[] {

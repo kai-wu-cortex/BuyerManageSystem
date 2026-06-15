@@ -29,6 +29,7 @@ import {
   isCloudbaseConfigured,
   listDocuments,
   loadLedgerBackupOrders,
+  loadLatestCompleteLedgerBackup,
   OperationType,
   prepareSampleForCloudbaseSync,
   replaceCollection,
@@ -505,13 +506,18 @@ export default function App() {
         setLatestRemoteLedgerBackup(latest);
         if (shouldLoadLedgerBackup(latest, readStoredLedgerBackupTime(), purchaseOrdersRef.current.length)) {
           try {
-            let backupToLoad = latest;
-            if (!Array.isArray(backupToLoad.orders) && backupToLoad.chunkCount) {
-              const full = await getDocument<LedgerBackup>(cloudbaseCollections.ledgerBackups, latest.id);
-              if (full) backupToLoad = full;
-            }
-            const parsedOrders = await loadLedgerBackupOrders(backupToLoad);
-            if (Array.isArray(parsedOrders) && parsedOrders.length > 0) {
+            // 用新的"自动跳过损坏备份"加载器：如果最新备份缺分块，
+            // 自动回退到上一份完整备份，避免出现"台账只加载到 3 月"这类
+            // 由部分写入失败导致的回退现象。
+            const result = await loadLatestCompleteLedgerBackup(records, async summary => {
+              const full = await getDocument<LedgerBackup>(cloudbaseCollections.ledgerBackups, summary.id);
+              return full ?? null;
+            });
+            if (result) {
+              const { backup: backupToLoad, orders: parsedOrders, skipped } = result;
+              if (skipped.length > 0) {
+                console.warn(`已跳过 ${skipped.length} 份不完整备份，使用 ${backupToLoad.timeCreated} 的备份`);
+              }
               const { merged } = mergePurchaseOrdersById(purchaseOrdersRef.current, parsedOrders);
               handleUpdateOrders(merged);
               markLedgerBackupLoaded(backupToLoad.rawTime);
