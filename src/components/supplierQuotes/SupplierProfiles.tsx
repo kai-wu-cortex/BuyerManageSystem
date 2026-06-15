@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Building2, Eye, Mail, Phone, Pencil, Save, Star, Trash2, TrendingUp, User } from 'lucide-react';
+import { Building2, Check, Eye, Mail, Phone, Pencil, Save, Star, Trash2, TrendingUp, User, X } from 'lucide-react';
 import { deleteSupplier, saveSupplierProfile } from '../../quotation/api';
 import { deriveQuotationDisplayStatus } from '../../quotation/normalization';
 import type { SupplierProfile, SupplierQuotation, SupplierQuotationItem } from '../../quotation/types';
@@ -15,18 +15,28 @@ interface Props {
   onFilePreview?: (file: { pathname: string; fileName: string; mimeType: string }) => void;
 }
 
+function normalizeSupplierName(name: string): string {
+  return name.toLowerCase().replace(/[\s()（）\-_.]/g, '');
+}
+
 export default function SupplierProfiles({ suppliers, quotations, items, onSaved, onOpenQuotation, onPreviewQuotation, onFilePreview }: Props) {
   const visibleSuppliers = useMemo(() => suppliers.filter(supplier => !supplier.deletedAt), [suppliers]);
   const [selectedId, setSelectedId] = useState(visibleSuppliers[0]?.id ?? '');
   const selected = visibleSuppliers.find(supplier => supplier.id === selectedId) ?? visibleSuppliers[0];
   const [draft, setDraft] = useState<SupplierProfile | null>(selected ?? null);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
 
   useEffect(() => {
     if (!visibleSuppliers.find(s => s.id === selectedId)) setSelectedId(visibleSuppliers[0]?.id ?? '');
   }, [selectedId, visibleSuppliers]);
   useEffect(() => {
     setDraft(selected ?? null);
+    setEditingName(false);
+    setNameDraft(selected?.name ?? '');
   }, [selected]);
 
   if (!draft) return <div className="p-12 text-center text-sm text-slate-500">上传报价单后会自动建立供应商档案。</div>;
@@ -43,10 +53,40 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
 
   const save = async () => {
     setSaving(true);
+    setError(null);
     try {
       const now = new Date().toISOString();
       await saveSupplierProfile({ ...draft, scoreUpdatedAt: now, updatedAt: now });
       await onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const commitNameEdit = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed) { setEditingName(false); setNameDraft(draft.name); return; }
+    if (trimmed === draft.name) { setEditingName(false); return; }
+    // 命名冲突检查：同一规范化名称的其他未删除供应商
+    const normalized = normalizeSupplierName(trimmed);
+    const conflict = visibleSuppliers.find(s => s.id !== draft.id && normalizeSupplierName(s.name) === normalized);
+    if (conflict) {
+      setError(`供应商名称与已有 "${conflict.name}" 冲突，无法重名。`);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const now = new Date().toISOString();
+      const next: SupplierProfile = { ...draft, name: trimmed, normalizedName: normalized, updatedAt: now };
+      await saveSupplierProfile(next);
+      setDraft(next);
+      setEditingName(false);
+      await onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -54,6 +94,8 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
 
   const handleDelete = async (supplierId: string) => {
     if (!window.confirm('确定要删除这个供应商吗？')) return;
+    setDeletingId(supplierId);
+    setError(null);
     try {
       await deleteSupplier(supplierId);
       if (selectedId === supplierId) {
@@ -62,17 +104,31 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
       }
       await onSaved();
     } catch (err) {
-      console.error(err);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingId(null);
     }
   };
 
   return (
     <div className="p-6">
+      {error && (
+        <div className="mb-3 flex items-center justify-between rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)}><X className="h-3.5 w-3.5" /></button>
+        </div>
+      )}
+
       <div className="mb-4 flex flex-wrap gap-2">
-        {suppliers.map(supplier => (
+        {visibleSuppliers.length === 0 && (
+          <span className="text-xs text-slate-400">暂无供应商，上传或手动录入报价单后会自动建立档案。</span>
+        )}
+        {visibleSuppliers.map(supplier => (
           <div key={supplier.id} className="flex items-center gap-1">
             <button type="button" onClick={() => setSelectedId(supplier.id)} className={`rounded-lg border px-3 py-2 text-xs font-medium ${supplier.id === draft.id ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}>{supplier.name}</button>
-            <button type="button" onClick={() => void handleDelete(supplier.id)} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
+            <button type="button" disabled={deletingId === supplier.id} onClick={() => void handleDelete(supplier.id)} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-40">
+              <Trash2 className="h-3 w-3" />
+            </button>
           </div>
         ))}
       </div>
@@ -81,13 +137,37 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-4">
             <div className="flex h-16 w-16 items-center justify-center rounded-xl border border-slate-200 bg-slate-100"><Building2 className="h-8 w-8 text-slate-400" /></div>
-            <div><div className="mb-1 flex items-center gap-2"><h1 className="text-lg font-bold text-slate-800">{draft.name}</h1><span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">已建档</span></div><p className="mb-3 text-xs text-slate-500">标准化名称: {draft.normalizedName}</p><div className="grid gap-2 text-xs text-slate-600 md:grid-cols-3">
-              <label className="flex items-center gap-1"><User className="h-3.5 w-3.5 text-slate-400" /><input value={draft.contactName} onChange={event => setDraft(current => current ? { ...current, contactName: event.target.value } : current)} placeholder="联系人" className="border-b border-slate-200 bg-transparent outline-none" /></label>
-              <label className="flex items-center gap-1"><Mail className="h-3.5 w-3.5 text-slate-400" /><input value={draft.contactEmail} onChange={event => setDraft(current => current ? { ...current, contactEmail: event.target.value } : current)} placeholder="邮箱" className="border-b border-slate-200 bg-transparent outline-none" /></label>
-              <label className="flex items-center gap-1"><Phone className="h-3.5 w-3.5 text-slate-400" /><input value={draft.contactPhone} onChange={event => setDraft(current => current ? { ...current, contactPhone: event.target.value } : current)} placeholder="电话" className="border-b border-slate-200 bg-transparent outline-none" /></label>
-            </div></div>
+            <div>
+              <div className="mb-1 flex items-center gap-2">
+                {editingName ? (
+                  <>
+                    <input
+                      autoFocus
+                      value={nameDraft}
+                      onChange={e => setNameDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') void commitNameEdit(); if (e.key === 'Escape') { setEditingName(false); setNameDraft(draft.name); } }}
+                      className="w-72 rounded border border-blue-300 px-2 py-1 text-lg font-bold text-slate-800 outline-none focus:border-blue-500"
+                    />
+                    <button type="button" disabled={saving} onClick={() => void commitNameEdit()} className="rounded p-1 text-emerald-500 hover:bg-emerald-50 disabled:opacity-40"><Check className="h-4 w-4" /></button>
+                    <button type="button" disabled={saving} onClick={() => { setEditingName(false); setNameDraft(draft.name); }} className="rounded p-1 text-slate-400 hover:bg-slate-50 disabled:opacity-40"><X className="h-4 w-4" /></button>
+                  </>
+                ) : (
+                  <>
+                    <h1 className="text-lg font-bold text-slate-800">{draft.name}</h1>
+                    <button type="button" onClick={() => { setNameDraft(draft.name); setEditingName(true); }} className="rounded p-1 text-slate-400 hover:bg-blue-50 hover:text-blue-600" title="编辑供应商名称"><Pencil className="h-3.5 w-3.5" /></button>
+                    <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">已建档</span>
+                  </>
+                )}
+              </div>
+              <p className="mb-3 text-xs text-slate-500">标准化名称: {draft.normalizedName}</p>
+              <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-3">
+                <label className="flex items-center gap-1"><User className="h-3.5 w-3.5 text-slate-400" /><input value={draft.contactName} onChange={event => setDraft(current => current ? { ...current, contactName: event.target.value } : current)} placeholder="联系人" className="border-b border-slate-200 bg-transparent outline-none" /></label>
+                <label className="flex items-center gap-1"><Mail className="h-3.5 w-3.5 text-slate-400" /><input value={draft.contactEmail} onChange={event => setDraft(current => current ? { ...current, contactEmail: event.target.value } : current)} placeholder="邮箱" className="border-b border-slate-200 bg-transparent outline-none" /></label>
+                <label className="flex items-center gap-1"><Phone className="h-3.5 w-3.5 text-slate-400" /><input value={draft.contactPhone} onChange={event => setDraft(current => current ? { ...current, contactPhone: event.target.value } : current)} placeholder="电话" className="border-b border-slate-200 bg-transparent outline-none" /></label>
+              </div>
+            </div>
           </div>
-          <button type="button" disabled={saving} onClick={() => void save()} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white"><Save className="h-3.5 w-3.5" /> 保存资料</button>
+          <button type="button" disabled={saving} onClick={() => void save()} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><Save className="h-3.5 w-3.5" /> 保存资料</button>
         </div>
       </div>
 
