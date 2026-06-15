@@ -484,7 +484,8 @@ function PreviewPanel({
   const handleReparse = async () => {
     if (!reparsePrompt.trim()) return;
     setReparseLoading(true);
-    setMessage('');
+    const isExcelSource = quotation.sourceFile.mimeType.includes('spreadsheet') || quotation.sourceFile.mimeType.includes('ms-excel');
+    setMessage(isExcelSource ? '正在重新解析报价单（行数较多时会自动分批，可能耗时数十秒）...' : '正在重新解析报价单...');
     try {
       const res = await fetch('/api/quotation/parse', {
         method: 'POST',

@@ -257,7 +257,8 @@ export default function QuotationReview({ quotation, items, supplier, onSaved, o
 
   const handleReparse = async () => {
     setReparseLoading(true);
-    setMessage('');
+    const isExcelSource = draftQuotation.sourceFile.mimeType.includes('spreadsheet') || draftQuotation.sourceFile.mimeType.includes('ms-excel');
+    setMessage(isExcelSource ? '正在重新解析报价单（行数较多时会自动分批，可能耗时数十秒）...' : '正在重新解析报价单...');
     try {
       const result = await parseQuotationFile(draftQuotation.sourceFile.pathname, draftQuotation.sourceFile.mimeType, customPrompt);
       if (result.value.items.length === 0) throw new Error('重新解析未获取到产品数据。');
