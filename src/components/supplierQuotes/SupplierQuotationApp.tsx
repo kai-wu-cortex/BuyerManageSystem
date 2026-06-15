@@ -96,7 +96,7 @@ export default function SupplierQuotationApp() {
           </div>
           <div>
             <h2 className="text-sm font-bold text-slate-800">报价管理</h2>
-            <p className="text-[10px] text-slate-400">共 {workspace.quotations.filter(q => !q.deletedAt).length} 份报价单</p>
+            <p className="text-[10px] text-slate-400">共 {workspace.quotations.filter(q => !q.deletedAt).length} 份报价单，{workspace.suppliers.filter(s => !s.deletedAt).length} 个供应商</p>
           </div>
         </div>
         {error && (

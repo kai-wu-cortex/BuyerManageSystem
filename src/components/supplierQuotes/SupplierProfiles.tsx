@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Building2, Eye, Mail, Phone, Pencil, Save, Star, Trash2, TrendingUp, User } from 'lucide-react';
 import { deleteSupplier, saveSupplierProfile } from '../../quotation/api';
 import { deriveQuotationDisplayStatus } from '../../quotation/normalization';
@@ -16,14 +16,15 @@ interface Props {
 }
 
 export default function SupplierProfiles({ suppliers, quotations, items, onSaved, onOpenQuotation, onPreviewQuotation, onFilePreview }: Props) {
-  const [selectedId, setSelectedId] = useState(suppliers[0]?.id ?? '');
-  const selected = suppliers.find(supplier => supplier.id === selectedId) ?? suppliers[0];
+  const visibleSuppliers = useMemo(() => suppliers.filter(supplier => !supplier.deletedAt), [suppliers]);
+  const [selectedId, setSelectedId] = useState(visibleSuppliers[0]?.id ?? '');
+  const selected = visibleSuppliers.find(supplier => supplier.id === selectedId) ?? visibleSuppliers[0];
   const [draft, setDraft] = useState<SupplierProfile | null>(selected ?? null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!selectedId && suppliers[0]) setSelectedId(suppliers[0].id);
-  }, [selectedId, suppliers]);
+    if (!visibleSuppliers.find(s => s.id === selectedId)) setSelectedId(visibleSuppliers[0]?.id ?? '');
+  }, [selectedId, visibleSuppliers]);
   useEffect(() => {
     setDraft(selected ?? null);
   }, [selected]);
@@ -56,7 +57,7 @@ export default function SupplierProfiles({ suppliers, quotations, items, onSaved
     try {
       await deleteSupplier(supplierId);
       if (selectedId === supplierId) {
-        const next = suppliers.find(s => s.id !== supplierId);
+        const next = visibleSuppliers.find(s => s.id !== supplierId);
         setSelectedId(next?.id ?? '');
       }
       await onSaved();
