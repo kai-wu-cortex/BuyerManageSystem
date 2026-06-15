@@ -91,6 +91,8 @@ export interface SupplierQuotationItem {
   sourceUnitPrice: number | null;
   minimumOrderQuantity: number | null;
   lineLeadTimeDays: number | null;
+  /** 产品名/型号/规格列原始拼接文本（用于无损保留校验/审计）。 */
+  sourceRawText?: string;
   productGroupId: string | null;
   groupMatchStatus: GroupMatchStatus;
   normalizedQuantity: number | null;

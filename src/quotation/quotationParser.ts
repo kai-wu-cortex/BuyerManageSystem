@@ -10,6 +10,13 @@ export interface ParsedQuotationItem {
   sourceUnitPrice: number | null;
   minimumOrderQuantity: number | null;
   lineLeadTimeDays: number | null;
+  /**
+   * 原始单元格拼接文本（产品名 / 型号 / 规格列原文，未经清洗）。
+   * Gemini 必须原样回填，便于客户端做"无损保留"校验：
+   * 校验 name + code + spec 是否覆盖了 sourceRawText 的所有 token，
+   * 缺失片段会自动补回 sourceSpecification 末尾。
+   */
+  sourceRawText?: string;
   fieldConfidence: FieldConfidence;
 }
 
@@ -207,6 +214,13 @@ export function rowsToQuotationDraft(rows: unknown[][]): ParsedQuotation {
   });
 
   const priceContext = inferPriceContext(rows, headerIndex);
+  // 找到产品名/型号/规格三列，给每行拼出 sourceRawText（无损保留兜底）
+  const nameColumns: number[] = [];
+  for (const [index, field] of headerMap) {
+    if (field === 'sourceProductName' || field === 'sourceProductCode' || field === 'sourceSpecification') {
+      nameColumns.push(index);
+    }
+  }
   const matrixItems = parseMatrixItems(rows, headerIndex, headerMap, priceContext.unit);
   const items = matrixItems.length > 0 ? matrixItems : rows.slice(headerIndex + 1).map((row, rowOffset) => {
     const item = createEmptyItem(rowOffset + headerIndex + 2);
@@ -222,6 +236,9 @@ export function rowsToQuotationDraft(rows: unknown[][]): ParsedQuotation {
         item[field] = text(row[index]);
       }
     }
+    // 用产品名/型号/规格三列原文拼成 sourceRawText
+    const rawParts = nameColumns.map(idx => text(row[idx])).filter(Boolean);
+    if (rawParts.length > 0) item.sourceRawText = rawParts.join(' ');
     return item;
   }).filter(item => item.sourceProductName || item.sourceProductCode);
 
@@ -242,6 +259,80 @@ export function rowsToQuotationDraft(rows: unknown[][]): ParsedQuotation {
   };
 }
 
+/**
+ * 把字符串拆成可比对的 token 集合（中文按单字、英文/数字按连续段）。
+ * 用于"无损保留"校验：判断 name + code + spec 是否覆盖了原文。
+ */
+export function tokenizeForLossCheck(value: string): string[] {
+  if (!value) return [];
+  const tokens: string[] = [];
+  // 中文单字
+  for (const ch of value.matchAll(/[一-鿿]/g)) tokens.push(ch[0]);
+  // 英文/数字连续段（保留大小写差异）
+  for (const seg of value.matchAll(/[A-Za-z0-9]+/g)) tokens.push(seg[0]);
+  return tokens;
+}
+
+/**
+ * 检查 name + code + spec 是否完整保留了 raw 原文中的所有 token。
+ * 返回 raw 中"还没出现"的字段片段，调用方可把它们补回 spec 末尾。
+ */
+export function findMissingRawTokens(
+  raw: string,
+  combined: string,
+): { missing: string[]; missingText: string } {
+  const rawTokens = tokenizeForLossCheck(raw);
+  if (rawTokens.length === 0) return { missing: [], missingText: '' };
+  const combinedTokens = new Set(tokenizeForLossCheck(combined));
+  const seen = new Set<string>();
+  const missing: string[] = [];
+  for (const token of rawTokens) {
+    if (combinedTokens.has(token)) continue;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    missing.push(token);
+  }
+  // 把连续的中文单字合并成原片段，便于阅读
+  const missingText = missing.length === 0 ? '' : (() => {
+    const result: string[] = [];
+    for (const token of missing) {
+      const last = result[result.length - 1];
+      if (last && /[一-鿿]/.test(last) && /[一-鿿]/.test(token)) {
+        result[result.length - 1] = last + token;
+      } else {
+        result.push(token);
+      }
+    }
+    return result.join(' ');
+  })();
+  return { missing, missingText };
+}
+
+/**
+ * 对单条解析结果做"无损保留"修复：name + code + spec 的拼接必须覆盖 sourceRawText
+ * 中的所有 token，否则把缺失片段补到 spec 末尾。
+ */
+export function reconcileItemAgainstRaw(item: ParsedQuotationItem): {
+  item: ParsedQuotationItem;
+  recovered: boolean;
+  recoveredText: string;
+} {
+  const raw = (item.sourceRawText ?? '').trim();
+  if (!raw) return { item, recovered: false, recoveredText: '' };
+  const combined = [item.sourceProductName, item.sourceSpecification, item.sourceProductCode]
+    .filter(Boolean).join(' ');
+  const { missingText } = findMissingRawTokens(raw, combined);
+  if (!missingText) return { item, recovered: false, recoveredText: '' };
+  const nextSpec = item.sourceSpecification
+    ? `${item.sourceSpecification} | ${missingText}`
+    : missingText;
+  return {
+    item: { ...item, sourceSpecification: nextSpec },
+    recovered: true,
+    recoveredText: missingText,
+  };
+}
+
 export function validateParsedQuotation(value: unknown): ParsedQuotationValidation {
   const raw = value && typeof value === 'object' ? value as Partial<ParsedQuotation> : {};
   const parsed: ParsedQuotation = {
@@ -255,20 +346,26 @@ export function validateParsedQuotation(value: unknown): ParsedQuotationValidati
     priceTaxMode: raw.priceTaxMode === 'tax_excluded' ? 'tax_excluded' : 'tax_included',
     paymentTerms: text(raw.paymentTerms),
     leadTimeDays: numberOrNull(raw.leadTimeDays),
-    items: Array.isArray(raw.items) ? raw.items.map(item => ({
-      sourceProductCode: text(item?.sourceProductCode),
-      sourceProductName: text(item?.sourceProductName),
-      sourceSpecification: text(item?.sourceSpecification),
-      sourceUnit: text(item?.sourceUnit),
-      sourcePackageDescription: text(item?.sourcePackageDescription),
-      sourcePackageQuantity: numberOrNull(item?.sourcePackageQuantity),
-      sourceUnitPrice: numberOrNull(item?.sourceUnitPrice),
-      minimumOrderQuantity: numberOrNull(item?.minimumOrderQuantity),
-      lineLeadTimeDays: numberOrNull(item?.lineLeadTimeDays),
-      fieldConfidence: item?.fieldConfidence && typeof item.fieldConfidence === 'object'
-        ? item.fieldConfidence
-        : {},
-    })) : [],
+    items: Array.isArray(raw.items) ? raw.items.map(item => {
+      const baseItem: ParsedQuotationItem = {
+        sourceProductCode: text(item?.sourceProductCode),
+        sourceProductName: text(item?.sourceProductName),
+        sourceSpecification: text(item?.sourceSpecification),
+        sourceUnit: text(item?.sourceUnit),
+        sourcePackageDescription: text(item?.sourcePackageDescription),
+        sourcePackageQuantity: numberOrNull(item?.sourcePackageQuantity),
+        sourceUnitPrice: numberOrNull(item?.sourceUnitPrice),
+        minimumOrderQuantity: numberOrNull(item?.minimumOrderQuantity),
+        lineLeadTimeDays: numberOrNull(item?.lineLeadTimeDays),
+        sourceRawText: text(item?.sourceRawText) || undefined,
+        fieldConfidence: item?.fieldConfidence && typeof item.fieldConfidence === 'object'
+          ? item.fieldConfidence
+          : {},
+      };
+      // 无损保留校验：name + code + spec 的拼接必须覆盖 sourceRawText 的所有 token
+      const { item: reconciled } = reconcileItemAgainstRaw(baseItem);
+      return reconciled;
+    }) : [],
   };
 
   const issues: ReviewIssue[] = [];

@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { rowsToQuotationDraft, validateParsedQuotation } from './quotationParser';
+import {
+  findMissingRawTokens,
+  reconcileItemAgainstRaw,
+  rowsToQuotationDraft,
+  tokenizeForLossCheck,
+  validateParsedQuotation,
+} from './quotationParser';
 
 const draft = rowsToQuotationDraft([
   ['供应商', '华东包装有限公司'],
@@ -72,5 +78,96 @@ assert.equal(invalid.valid, false);
 assert.ok(invalid.issues.some(issue => issue.field === 'supplierName' && issue.blocking));
 assert.ok(invalid.issues.some(issue => issue.field === 'items.0.sourceUnitPrice' && issue.blocking));
 assert.equal(invalid.value.items[0].sourceUnitPrice, null);
+
+// === 无损保留 (lossless retention) ===
+
+// tokenize：中文逐字 + 英数字按段
+assert.deepEqual(tokenizeForLossCheck('镭射银LB100'), ['镭', '射', '银', 'LB100']);
+assert.deepEqual(tokenizeForLossCheck('Φ50×3mm L=6m'), ['50', '3mm', 'L', '6m']);
+assert.deepEqual(tokenizeForLossCheck(''), []);
+
+// findMissingRawTokens：无丢失
+assert.deepEqual(
+  findMissingRawTokens('镭射银LB100', '镭射银LB100'),
+  { missing: [], missingText: '' },
+);
+// 完整覆盖（顺序无关）
+assert.deepEqual(
+  findMissingRawTokens('镭射银LB100', 'LB100 镭射银'),
+  { missing: [], missingText: '' },
+);
+// LB100 被丢掉
+const lostId = findMissingRawTokens('镭射银LB100', '镭射银');
+assert.deepEqual(lostId.missing, ['LB100']);
+assert.equal(lostId.missingText, 'LB100');
+// 多个连续中文片段被合并
+const lostChinese = findMissingRawTokens('幻彩系列LB100', 'LB100');
+assert.deepEqual(lostChinese.missing, ['幻', '彩', '系', '列']);
+assert.equal(lostChinese.missingText, '幻彩系列');
+
+// reconcileItemAgainstRaw：自动把丢失的 ID 补回 spec
+const reconciled = reconcileItemAgainstRaw({
+  sourceProductCode: '',
+  sourceProductName: '镭射银',
+  sourceSpecification: '0.5mm',
+  sourceUnit: 'kg',
+  sourcePackageDescription: '',
+  sourcePackageQuantity: 1,
+  sourceUnitPrice: 100,
+  minimumOrderQuantity: null,
+  lineLeadTimeDays: null,
+  sourceRawText: '镭射银LB100 0.5mm',
+  fieldConfidence: {},
+});
+assert.equal(reconciled.recovered, true);
+assert.equal(reconciled.recoveredText, 'LB100');
+assert.equal(reconciled.item.sourceSpecification, '0.5mm | LB100');
+assert.equal(reconciled.item.sourceProductName, '镭射银'); // name 保持原样
+
+// 没有 sourceRawText → 直接返回
+const noRaw = reconcileItemAgainstRaw({
+  sourceProductCode: '', sourceProductName: 'X', sourceSpecification: '',
+  sourceUnit: '', sourcePackageDescription: '',
+  sourcePackageQuantity: null, sourceUnitPrice: null,
+  minimumOrderQuantity: null, lineLeadTimeDays: null,
+  fieldConfidence: {},
+});
+assert.equal(noRaw.recovered, false);
+
+// validateParsedQuotation 集成：sourceRawText 透传 + 自动 reconcile
+const losslessValidation = validateParsedQuotation({
+  supplierName: '某公司',
+  quotationDate: '2026-06-10',
+  currency: 'CNY',
+  exchangeRateToCny: 1,
+  taxRate: 13,
+  priceTaxMode: 'tax_included',
+  items: [{
+    sourceProductCode: '',
+    sourceProductName: '镭射银',          // ❌ 丢了 LB100
+    sourceSpecification: '',
+    sourceUnit: 'kg',
+    sourcePackageDescription: '',
+    sourcePackageQuantity: 1,
+    sourceUnitPrice: 100,
+    minimumOrderQuantity: null,
+    lineLeadTimeDays: null,
+    sourceRawText: '镭射银LB100',         // 原文里有 LB100
+    fieldConfidence: {},
+  }],
+});
+// reconcile 后 LB100 进入 spec，原始文本被保留
+assert.equal(losslessValidation.value.items[0].sourceSpecification, 'LB100');
+assert.equal(losslessValidation.value.items[0].sourceRawText, '镭射银LB100');
+
+// rowsToQuotationDraft 也填充 sourceRawText
+const rawTextDraft = rowsToQuotationDraft([
+  ['产品编码', '产品名称', '规格', '单位', '包装数量', '单价'],
+  ['LB-100', '镭射银LB100', '0.5mm 蓝色', 'kg', 1, 12.5],
+]);
+assert.equal(rawTextDraft.items.length, 1);
+assert.ok(rawTextDraft.items[0].sourceRawText, 'sourceRawText 应被填充');
+assert.match(rawTextDraft.items[0].sourceRawText!, /镭射银LB100/);
+assert.match(rawTextDraft.items[0].sourceRawText!, /0\.5mm 蓝色/);
 
 console.log('quotation parser tests passed');

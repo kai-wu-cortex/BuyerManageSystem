@@ -517,6 +517,7 @@ function PreviewPanel({
         sourceUnitPrice: item.sourceUnitPrice != null ? Number(item.sourceUnitPrice) : null,
         minimumOrderQuantity: item.minimumOrderQuantity != null ? Number(item.minimumOrderQuantity) : null,
         lineLeadTimeDays: item.lineLeadTimeDays != null ? Number(item.lineLeadTimeDays) : null,
+        sourceRawText: typeof item.sourceRawText === 'string' && item.sourceRawText ? item.sourceRawText : undefined,
         productGroupId: null,
         groupMatchStatus: 'unmatched',
         normalizedQuantity: null,

@@ -135,22 +135,33 @@ export const BASE_QUOTATION_PARSE_INSTRUCTION = `你是专业的报价单解析�
 - 跳过空行、分隔行、合计行、小计行
 - 只保留实际的产品数据行
 
-### 产品名称与型号分离
-- 同一单元格包含名称和型号（如"LED灯珠-5050-RED"），拆分为：
-  - sourceProductName = 纯产品名称（"LED灯珠"）
-  - sourceSpecification = 规格参数（"5050 RED"）
-- 已有独立编码列和名称列时保持原样
-- 产品名称末尾连续的英文与数字编号是产品关键 ID。例如“镭射银LB100”必须完整保留在 sourceProductName 中，不能删除、忽略或拆成规格；“镭射银系列LB100-LB101”也必须保留完整编号范围
+### ⚠️ 产品名 / 型号 / 规格 字段的"无损保留"铁律（最高优先级）
+这三个字段（sourceProductCode / sourceProductName / sourceSpecification）必须确保**原文不丢字、不改写、不翻译、不缩写、不补全**。请务必：
+1. **逐字保留**：原始文本里的每一个汉字、英文字母、数字、符号都必须出现在 code/name/spec 三个字段之一中
+2. **不要"美化"**：不要把"LB-100"改写成"LB100"或"LB 100"；不要把"Φ50×100mm"改写成"50x100"；不要把"红色RED"改写成"红色"或"RED"
+3. **不要翻译**：中文/英文混排的内容保持原文（"镭射银LB100" 不能变成 "Laser Silver LB100" 或 "镭射银"）
+4. **不要省略后缀编号**：产品名末尾的英文+数字编号是关键 ID，必须完整保留在 sourceProductName 里。例如：
+   - "镭射银LB100" → name="镭射银LB100"，spec=""，✅
+   - "镭射银LB100" → name="镭射银"，spec="LB100"，❌（拆分但 LB100 不是规格，是 ID）
+   - "镭射银系列LB100-LB101" → name 必须完整含 "LB100-LB101"
+5. **拆分规则**（仅当确有规格时）：
+   - "LED灯珠 5050 RED 0.2W" → name="LED灯珠"，spec="5050 RED 0.2W"
+   - "钢管 Φ50×3mm L=6m" → name="钢管"，spec="Φ50×3mm L=6m"
+   - 拆分后 name + spec 拼起来必须能还原成原文（顺序可调，但字符必须齐）
+6. **额外保险字段 sourceRawText**：每条产品都必须额外返回 sourceRawText 字段，**原样填写"产品名/型号/规格列在原表格中的拼接文本"**，这是系统做完整性校验用的，不能省略、不能改写。
+   - 例：原行的产品名列="镭射银LB100"、规格列="0.5mm 蓝色"，则 sourceRawText="镭射银LB100 0.5mm 蓝色"
 
 ### 多规格展开为独立行
 - 同一产品的不同规格变体（不同厚度、粒径、尺寸、颜色等），每种变体单独一行
 - 例：0.5mm/1.0mm/2.0mm三种厚度 → 3行，各自填对应规格和价格
+- 展开后每行的 name 仍保持原产品名（含 ID 后缀），spec 填该行对应的规格值
 
 ### 矩阵表展开
 - 行=产品，列=不同规格的价格 → 每个价格单元格展开为独立行
+- 列头标识的规格信息进入 sourceSpecification
 
 ### 合并单元格处理
-- 产品名称跨多行时，下方每行都是该产品的不同变体，每行独立记录
+- 产品名称跨多行时，下方每行都是该产品的不同变体，每行独立记录，每行都填完整产品名
 
 ### 数据准确性
 - 只提取明确存在的信息，不要猜测
@@ -169,6 +180,7 @@ const ITEM_SCHEMA = {
     sourceUnitPrice: { type: Type.NUMBER, nullable: true },
     minimumOrderQuantity: { type: Type.NUMBER, nullable: true },
     lineLeadTimeDays: { type: Type.NUMBER, nullable: true },
+    sourceRawText: { type: Type.STRING },
   },
   required: [
     'sourceProductCode',
@@ -180,6 +192,7 @@ const ITEM_SCHEMA = {
     'sourceUnitPrice',
     'minimumOrderQuantity',
     'lineLeadTimeDays',
+    'sourceRawText',
   ],
 } as const;
 
