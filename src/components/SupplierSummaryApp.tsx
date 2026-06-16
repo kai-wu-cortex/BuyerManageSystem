@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+ import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChevronDown, ChevronRight, Search, Briefcase, Package, Calendar, Star, X } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { PurchaseOrder } from '../types';
@@ -49,6 +49,18 @@ interface SupplierSummary {
   materials: MaterialQuote[];
 }
 
+/** 把任意值安全转成有限数字，无效时返回 0；专为防 `.toFixed is not a function` 设计。 */
+function toSafeNumber(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value === null || value === undefined || value === '') return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function fmtMoney(value: unknown): string {
+  return `¥${toSafeNumber(value).toFixed(2)}`;
+}
+
 /**
  * 判断当前 OrderItem 是否是赠品。
  *
@@ -91,7 +103,8 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
 
     for (const item of po.items) {
       const key = item.code || item.name;
-      const itemPrice = Number(item.price) || 0;
+      const itemPrice = toSafeNumber(item.price);
+      const itemQty = toSafeNumber(item.orderedQty);
       const isGift = isGiftItem(item, po.remarks);
       let mat = bucket.materialMap.get(key);
       if (!mat) {
@@ -115,7 +128,7 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
         bucket.materialMap.set(key, mat);
       }
       // 累计数量与订单数：赠品也算（用户能看到出现次数）
-      mat.totalQty += Number(item.orderedQty) || 0;
+      mat.totalQty += itemQty;
       mat.orderCount += 1;
 
       if (!isGift) {
@@ -127,11 +140,11 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
           mat.lastDate = po.date;
           mat.lastPrice = itemPrice;
         }
-        mat._priceSamples.push({ price: itemPrice, qty: Number(item.orderedQty) || 0, date: po.date });
+        mat._priceSamples.push({ price: itemPrice, qty: itemQty, date: po.date });
         mat.priceHistory.push({
           date: po.date,
           price: itemPrice,
-          qty: Number(item.orderedQty) || 0,
+          qty: itemQty,
           orderId: po.id,
           remark: typeof item.remark === 'string' ? item.remark : '',
         });
@@ -152,8 +165,8 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
     let latestDate = bucket.orders[0]?.date ?? '';
     for (const po of bucket.orders) {
       for (const item of po.items) {
-        totalAmount += (Number(item.orderedQty) || 0) * (Number(item.price) || 0);
-        totalQty += Number(item.orderedQty) || 0;
+        totalAmount += toSafeNumber(item.orderedQty) * toSafeNumber(item.price);
+        totalQty += toSafeNumber(item.orderedQty);
       }
       if (!earliestDate || po.date.localeCompare(earliestDate) < 0) earliestDate = po.date;
       if (!latestDate || po.date.localeCompare(latestDate) > 0) latestDate = po.date;
@@ -246,7 +259,7 @@ const PriceSparkline = memo(function PriceSparkline({
     return <div ref={containerRef} style={{ width, height }} className="bg-slate-50 rounded" />;
   }
 
-  const isUp = history[history.length - 1].price >= history[0].price;
+  const isUp = toSafeNumber(history[history.length - 1].price) >= toSafeNumber(history[0].price);
   const stroke = isUp ? '#dc2626' : '#16a34a';
   const fillId = `spark-${isUp ? 'u' : 'd'}`;
 
@@ -255,15 +268,17 @@ const PriceSparkline = memo(function PriceSparkline({
   const padY = 3;
   const innerW = width - padX * 2;
   const innerH = height - padY * 2;
-  const prices = history.map(h => h.price);
-  const minP = Math.min(...prices);
-  const maxP = Math.max(...prices);
+  // 防御：history 里可能混入字符串 price（旧缓存 / JSON 反序列化），先全部转数字
+  const safePrices = history.map(h => toSafeNumber(h.price));
+  const minP = Math.min(...safePrices);
+  const maxP = Math.max(...safePrices);
   const range = maxP - minP || 1;
   const n = history.length;
   // 单点情况：复制成两点画一条横线
-  const points = (n === 1 ? [history[0], history[0]] : history).map((h, i, arr) => {
+  const drawPoints = n === 1 ? [safePrices[0], safePrices[0]] : safePrices;
+  const points = drawPoints.map((p, i, arr) => {
     const x = padX + (arr.length === 1 ? innerW / 2 : (i / (arr.length - 1)) * innerW);
-    const y = padY + innerH - ((h.price - minP) / range) * innerH;
+    const y = padY + innerH - ((p - minP) / range) * innerH;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   const linePath = `M${points.join(' L')}`;
@@ -300,8 +315,8 @@ function PriceTrendDrawer({ supplier, material, onClose }: {
   onClose: () => void;
 }) {
   const history = material.priceHistory;
-  const first = history[0]?.price ?? 0;
-  const last = history.at(-1)?.price ?? 0;
+  const first = toSafeNumber(history[0]?.price);
+  const last = toSafeNumber(history.at(-1)?.price);
   const change = last - first;
   const changePct = first > 0 ? (change / first) * 100 : 0;
   const isUp = change >= 0;
@@ -330,7 +345,7 @@ function PriceTrendDrawer({ supplier, material, onClose }: {
         <div className="grid grid-cols-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-center">
           <div>
             <p className="text-[10px] text-slate-400">最新</p>
-            <p className="font-mono text-base font-bold text-slate-800">¥{last.toFixed(2)}</p>
+            <p className="font-mono text-base font-bold text-slate-800">{fmtMoney(last)}</p>
           </div>
           <div>
             <p className="text-[10px] text-slate-400">区间涨跌</p>
@@ -341,9 +356,9 @@ function PriceTrendDrawer({ supplier, material, onClose }: {
           <div>
             <p className="text-[10px] text-slate-400">最低 / 最高</p>
             <p className="font-mono text-xs font-bold text-slate-700">
-              <span className="text-emerald-600">¥{material.minPrice.toFixed(2)}</span>
+              <span className="text-emerald-600">{fmtMoney(material.minPrice)}</span>
               <span className="px-1 text-slate-300">|</span>
-              <span className="text-rose-600">¥{material.maxPrice.toFixed(2)}</span>
+              <span className="text-rose-600">{fmtMoney(material.maxPrice)}</span>
             </p>
           </div>
           <div>
@@ -358,7 +373,10 @@ function PriceTrendDrawer({ supplier, material, onClose }: {
             <div className="flex h-full items-center justify-center text-xs text-slate-400">该物料暂无非赠品价格历史。</div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={history.map((h, i) => ({ ...h, idx: i }))} margin={{ top: 12, right: 16, bottom: 4, left: 8 }}>
+              <AreaChart
+                data={history.map((h, i) => ({ ...h, idx: i, price: toSafeNumber(h.price) }))}
+                margin={{ top: 12, right: 16, bottom: 4, left: 8 }}
+              >
                 <defs>
                   <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={stroke} stopOpacity={0.3} />
@@ -366,9 +384,9 @@ function PriceTrendDrawer({ supplier, material, onClose }: {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} domain={['dataMin', 'dataMax']} width={48} tickFormatter={v => `¥${Number(v).toFixed(2)}`} />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} domain={['dataMin', 'dataMax']} width={48} tickFormatter={v => fmtMoney(v)} />
                 <Tooltip
-                  formatter={(value: number) => [`¥${Number(value).toFixed(2)}`, '单价']}
+                  formatter={(value: number) => [fmtMoney(value), '单价']}
                   labelFormatter={(_, payload) => {
                     const p = payload?.[0]?.payload as PricePoint | undefined;
                     return p ? `${p.date} · ${p.orderId}` : '';
@@ -399,16 +417,20 @@ function PriceTrendDrawer({ supplier, material, onClose }: {
                 </tr>
               </thead>
               <tbody>
-                {sortedDesc.map((p, idx) => (
-                  <tr key={p.orderId + idx} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="py-1.5 text-slate-600">{p.date}</td>
-                    <td className="py-1.5 text-blue-600">{p.orderId}</td>
-                    <td className="py-1.5 text-right font-bold text-slate-800">¥{p.price.toFixed(2)}</td>
-                    <td className="py-1.5 text-right text-slate-600">{p.qty.toLocaleString()}</td>
-                    <td className="py-1.5 text-right text-slate-700">¥{(p.price * p.qty).toFixed(2)}</td>
-                    <td className="py-1.5 max-w-[160px] truncate text-slate-500" title={p.remark}>{p.remark || '-'}</td>
-                  </tr>
-                ))}
+                {sortedDesc.map((p, idx) => {
+                  const safePrice = toSafeNumber(p.price);
+                  const safeQty = toSafeNumber(p.qty);
+                  return (
+                    <tr key={p.orderId + idx} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="py-1.5 text-slate-600">{p.date}</td>
+                      <td className="py-1.5 text-blue-600">{p.orderId}</td>
+                      <td className="py-1.5 text-right font-bold text-slate-800">{fmtMoney(safePrice)}</td>
+                      <td className="py-1.5 text-right text-slate-600">{safeQty.toLocaleString()}</td>
+                      <td className="py-1.5 text-right text-slate-700">{fmtMoney(safePrice * safeQty)}</td>
+                      <td className="py-1.5 max-w-[160px] truncate text-slate-500" title={p.remark}>{p.remark || '-'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -664,15 +686,15 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
                                   </td>
                                   <td className={`p-2 text-right font-bold ${isBestPrice ? 'text-emerald-600' : 'text-slate-700'}`}>
                                     {isBestPrice && <Star className="inline w-3 h-3 mr-0.5 fill-emerald-500 text-emerald-500" />}
-                                    ¥{mat.lastPrice.toFixed(2)}
+                                    {fmtMoney(mat.lastPrice)}
                                   </td>
-                                  <td className="p-2 text-right text-slate-600">¥{mat.avgPrice.toFixed(2)}</td>
+                                  <td className="p-2 text-right text-slate-600">{fmtMoney(mat.avgPrice)}</td>
                                   <td className="p-2 text-right text-emerald-600">
-                                    {mat.minPrice > 0 ? `¥${mat.minPrice.toFixed(2)}` : <span className="text-slate-300">—</span>}
+                                    {toSafeNumber(mat.minPrice) > 0 ? fmtMoney(mat.minPrice) : <span className="text-slate-300">—</span>}
                                   </td>
-                                  <td className="p-2 text-right text-rose-600">¥{mat.maxPrice.toFixed(2)}</td>
+                                  <td className="p-2 text-right text-rose-600">{fmtMoney(mat.maxPrice)}</td>
                                   <td className="p-2 text-right text-slate-700">
-                                    {mat.totalQty.toLocaleString()} <span className="text-slate-400 font-sans">{mat.unit}</span>
+                                    {toSafeNumber(mat.totalQty).toLocaleString()} <span className="text-slate-400 font-sans">{mat.unit}</span>
                                   </td>
                                   <td className="p-2 text-right text-slate-500">{mat.orderCount}</td>
                                   <td className="p-2 text-right text-slate-500">{mat.lastDate}</td>
