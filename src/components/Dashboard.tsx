@@ -40,6 +40,9 @@ import {
 import {
   buildDashboardMetrics,
   buildLedgerBreakdown,
+  DEFAULT_DASHBOARD_DATA_FILTERS,
+  sanitizeDashboardDataFilters,
+  type DashboardDataFilters,
   type LedgerBreakdownField,
   type LedgerBreakdownMetric,
 } from '../utils/dashboardMetrics';
@@ -340,8 +343,26 @@ export default function Dashboard({
   // 未审核通常指待签发，但在途订单定义为正在执行且未全部入库
   const inTransitCount = purchaseOrders.filter(po => po.executionStatus !== '未执行' && po.inboundStatus !== '全部入库').length;
 
-  const dashboardMetrics = useMemo(() => buildDashboardMetrics(purchaseOrders), [purchaseOrders]);
-  const { totalAmount, monthlySpend, supplierSpend, categorySpend } = dashboardMetrics;
+  const [dataFilters, setDataFilters] = useState<DashboardDataFilters>((() => {
+    const saved = localStorage.getItem('dashboard_data_filters');
+    if (saved) {
+      try {
+        return sanitizeDashboardDataFilters(JSON.parse(saved));
+      } catch (e) {}
+    }
+    return { ...DEFAULT_DASHBOARD_DATA_FILTERS };
+  })());
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('dashboard_data_filters', JSON.stringify(dataFilters));
+  }, [dataFilters]);
+
+  const dashboardMetrics = useMemo(
+    () => buildDashboardMetrics(purchaseOrders, { filters: dataFilters }),
+    [purchaseOrders, dataFilters],
+  );
+  const { totalAmount, monthlySpend, supplierSpend, categorySpend, excludedLineCount, includedLineCount } = dashboardMetrics;
   const [analysisConfigs, setAnalysisConfigs] = useState<Record<string, DashboardAnalysisConfig>>((() => {
     const saved = localStorage.getItem('dashboard_analysis_configs');
     if (saved) {
@@ -454,6 +475,7 @@ export default function Dashboard({
         setModuleWidths(sanitizeModuleWidths(settings.moduleWidths));
         setAnalysisConfigs(sanitizeAnalysisConfigs(settings.analysisConfigs));
         setCustomAnalysisModules(sanitizeCustomAnalysisModules(settings.customAnalysisModules));
+        if (settings.dataFilters) setDataFilters(sanitizeDashboardDataFilters(settings.dataFilters));
       })
       .catch(error => {
         console.warn('Failed to load dashboard settings from CloudBase:', error);
@@ -484,6 +506,7 @@ export default function Dashboard({
       moduleWidths,
       analysisConfigs,
       customAnalysisModules,
+      dataFilters,
     };
 
     const timer = window.setTimeout(() => {
@@ -493,7 +516,7 @@ export default function Dashboard({
     }, 600);
 
     return () => window.clearTimeout(timer);
-  }, [authUser, timelineCols, visibleFields, drawerCols, drawerFields, ganttFields, moduleOrder, moduleWidths, analysisConfigs, customAnalysisModules]);
+  }, [authUser, timelineCols, visibleFields, drawerCols, drawerFields, ganttFields, moduleOrder, moduleWidths, analysisConfigs, customAnalysisModules, dataFilters]);
 
   const adjustWidth = (id: string, delta: number) => {
     setModuleWidths(prev => {
@@ -585,6 +608,7 @@ export default function Dashboard({
       groupBy: config.groupBy,
       metric: config.metric,
       limit: config.limit,
+      filters: dataFilters,
     });
     const valueLabel = getMetricLabel(config.metric);
 
@@ -737,7 +761,88 @@ export default function Dashboard({
     'kpis': {
       colSpan: 'col-span-1 lg:col-span-2 xl:col-span-3 transition-transform duration-300',
       content: (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 h-full pointer-events-auto">
+        <div className="space-y-3 pointer-events-auto">
+          {/* 数据过滤工具栏 */}
+          <div className="flex items-center justify-between rounded-lg bg-slate-50/50 px-3 py-1.5">
+            <div className="flex items-center gap-2 text-[10px] font-mono text-slate-500">
+              <span className="font-bold uppercase tracking-wider">关键指标 / KPIS</span>
+              {excludedLineCount > 0 && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold text-amber-700">
+                  已忽略 {excludedLineCount} 行 / 计入 {includedLineCount} 行
+                </span>
+              )}
+            </div>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowFilterPanel(prev => !prev)}
+                className={`flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-bold transition-colors ${showFilterPanel ? 'bg-slate-200 text-slate-800' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
+                title="数据过滤设置"
+              >
+                <Sliders className="w-3 h-3" /> 数据过滤
+              </button>
+              {showFilterPanel && (
+                <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
+                  <div className="mb-2 flex items-center justify-between border-b border-slate-100 pb-2">
+                    <h4 className="text-xs font-bold text-slate-700">数据过滤 / DATA FILTERS</h4>
+                    <button type="button" onClick={() => setShowFilterPanel(false)} className="text-slate-400 hover:text-slate-600">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <p className="mb-2 text-[10px] leading-relaxed text-slate-400">
+                    勾选的规则会在统计采购总金额、月度趋势、供应商排行、自定义分析等所有大屏指标时跳过对应行
+                  </p>
+                  {([
+                    ['ignoreZeroOrInvalidPrice', '忽略单价为 0 或非数字的行', '价格列空白 / 字符串 / 0 都不计入金额'],
+                    ['ignoreZeroOrInvalidQuantity', '忽略数量为 0 或非数字的行', '订购数量为空 / 0 / 字符串都跳过'],
+                    ['ignoreGiftItems', '忽略赠品行', '行备注 / 类别 / 单据备注里包含"赠品/赠送"'],
+                    ['ignoreVoidedOrders', '忽略作废订单', '单据备注 / 状态包含"作废/取消/废弃"的整单'],
+                    ['ignoreEmptySupplier', '忽略空白供应商的整单', '供应商列空白时整单不计入'],
+                    ['ignoreEmptyCategory', '忽略空白物料类别的行', '仅影响"按类别"的统计'],
+                  ] as const).map(([key, label, hint]) => (
+                    <label key={key} className="mb-1 flex cursor-pointer items-start gap-2 rounded p-1 text-xs text-slate-600 hover:bg-slate-50">
+                      <input
+                        type="checkbox"
+                        checked={dataFilters[key]}
+                        onChange={e => setDataFilters(prev => ({ ...prev, [key]: e.target.checked }))}
+                        className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="flex-1">
+                        <span className="block font-bold">{label}</span>
+                        <span className="block text-[10px] text-slate-400">{hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                  <div className="mt-2 flex gap-1 border-t border-slate-100 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setDataFilters({ ...DEFAULT_DASHBOARD_DATA_FILTERS })}
+                      className="flex-1 rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600 hover:bg-slate-200"
+                    >
+                      恢复默认
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDataFilters({
+                        ignoreZeroOrInvalidPrice: false,
+                        ignoreZeroOrInvalidQuantity: false,
+                        ignoreGiftItems: false,
+                        ignoreVoidedOrders: false,
+                        ignoreEmptySupplier: false,
+                        ignoreEmptyCategory: false,
+                      })}
+                      className="flex-1 rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600 hover:bg-slate-200"
+                    >
+                      全部关闭
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* KPI 卡片 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 h-full">
         <div className="bg-white p-6 border border-slate-200 rounded-xl shadow-md flex items-center justify-between">
           <div className="space-y-1">
             <span className="text-slate-400 text-[10px] uppercase font-bold font-mono tracking-wider">采购总金额 / PO TOTAL VALUE</span>
@@ -801,6 +906,7 @@ export default function Dashboard({
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
           </div>
         </div>
+          </div>
         </div>
       )
     },

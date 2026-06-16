@@ -42,6 +42,8 @@ export type DashboardViewSettings = {
   moduleWidths: Record<string, number>;
   analysisConfigs?: Record<string, unknown>;
   customAnalysisModules?: unknown[];
+  /** 数据过滤规则（只是 Partial 这里，避免老存档缺字段时类型卡住） */
+  dataFilters?: Record<string, boolean>;
 };
 
 export type LedgerViewSettings = {

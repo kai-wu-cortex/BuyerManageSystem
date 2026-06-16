@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { PurchaseOrder } from '../types';
-import { buildDashboardMetrics, buildLedgerBreakdown } from './dashboardMetrics';
+import {
+  buildDashboardMetrics,
+  buildLedgerBreakdown,
+  DEFAULT_DASHBOARD_DATA_FILTERS,
+  sanitizeDashboardDataFilters,
+} from './dashboardMetrics';
 
 function po(overrides: Partial<PurchaseOrder>): PurchaseOrder {
   return {
@@ -236,3 +241,81 @@ assert.deepEqual(
   ],
   'custom breakdown should count unique purchase orders by selected field',
 );
+
+// === 数据过滤规则 dataFilters ===
+
+// 1) 默认过滤生效：单价 0 / 数量 0 / 赠品行不计入
+const dirtyOrder = po({
+  id: 'PO-DIRTY',
+  items: [
+    { code: 'X1', name: '正常行', spec: '', category: '原材料', unit: 'PCS', orderedQty: 10, price: 100, taxAmount: 0, remark: '', receivedQty: 0 },
+    { code: 'X2', name: '价格 0', spec: '', category: '原材料', unit: 'PCS', orderedQty: 10, price: 0, taxAmount: 0, remark: '', receivedQty: 0 },
+    { code: 'X3', name: '价格非数字', spec: '', category: '原材料', unit: 'PCS', orderedQty: 10, price: 'abc' as unknown as number, taxAmount: 0, remark: '', receivedQty: 0 },
+    { code: 'X4', name: '数量 0', spec: '', category: '原材料', unit: 'PCS', orderedQty: 0, price: 100, taxAmount: 0, remark: '', receivedQty: 0 },
+    { code: 'X5', name: '赠品', spec: '', category: '原材料', unit: 'PCS', orderedQty: 5, price: 0, taxAmount: 0, remark: '本批赠品', receivedQty: 0 },
+  ],
+});
+const dirtyMetrics = buildDashboardMetrics([dirtyOrder]);
+assert.equal(dirtyMetrics.totalAmount, 1000, '默认过滤后只剩正常行 10*100');
+assert.equal(dirtyMetrics.includedLineCount, 1, '只有 1 行计入');
+assert.equal(dirtyMetrics.excludedLineCount, 4, '4 行被忽略');
+
+// 2) 关闭赠品过滤后赠品行的金额仍然 0（因 price=0 仍被另一条规则挡掉）
+const noGiftFilter = buildDashboardMetrics([dirtyOrder], {
+  filters: { ...DEFAULT_DASHBOARD_DATA_FILTERS, ignoreGiftItems: false },
+});
+assert.equal(noGiftFilter.totalAmount, 1000, '赠品 price=0 仍被价格规则挡掉');
+
+// 3) 全部关闭过滤：脏数据全进，验证 totalAmount 至少包含正常行
+const noFilters = buildDashboardMetrics([dirtyOrder], {
+  filters: {
+    ignoreZeroOrInvalidPrice: false,
+    ignoreZeroOrInvalidQuantity: false,
+    ignoreGiftItems: false,
+    ignoreVoidedOrders: false,
+    ignoreEmptySupplier: false,
+    ignoreEmptyCategory: false,
+  },
+});
+// price=NaN(*qty)=NaN 会让 getLineGrossAmount 返 0；其他 0 价/0 量都返 0
+// 所以 totalAmount 仍只有 1000，但 includedLineCount 应该 = 1（其他都是 0 金额）
+assert.equal(noFilters.totalAmount, 1000);
+
+// 4) 作废订单整单跳过
+const voidedOrder = po({
+  id: 'PO-VOID',
+  remarks: '此单已作废',
+  items: [
+    { code: 'V1', name: '物料', spec: '', category: '原材料', unit: 'PCS', orderedQty: 10, price: 100, taxAmount: 0, remark: '', receivedQty: 0 },
+  ],
+});
+const withVoid = buildDashboardMetrics([dirtyOrder, voidedOrder], {
+  filters: { ...DEFAULT_DASHBOARD_DATA_FILTERS, ignoreVoidedOrders: true },
+});
+assert.equal(withVoid.totalAmount, 1000, '作废订单不计入');
+const withoutVoidFilter = buildDashboardMetrics([dirtyOrder, voidedOrder]);
+assert.equal(withoutVoidFilter.totalAmount, 2000, '默认不忽略作废，正常行 1000 + 作废订单的正常行 1000');
+
+// 5) 空白供应商整单跳过
+const noSupplier = po({
+  id: 'PO-NO-VEN', supplier: '   ',
+  items: [{ code: 'V1', name: '物料', spec: '', category: '原材料', unit: 'PCS', orderedQty: 10, price: 100, taxAmount: 0, remark: '', receivedQty: 0 }],
+});
+const withEmptySupplierFilter = buildDashboardMetrics([dirtyOrder, noSupplier], {
+  filters: { ...DEFAULT_DASHBOARD_DATA_FILTERS, ignoreEmptySupplier: true },
+});
+assert.equal(withEmptySupplierFilter.totalAmount, 1000);
+
+// 6) buildLedgerBreakdown 同样使用 filters
+const breakdownWithFilters = buildLedgerBreakdown([dirtyOrder], {
+  groupBy: 'category', metric: 'amount', limit: 5,
+});
+assert.deepEqual(breakdownWithFilters, [{ name: '原材料', value: 1000 }], 'breakdown 默认过滤掉脏行');
+
+// 7) sanitizeDashboardDataFilters：垃圾输入被规范化
+const sanitized = sanitizeDashboardDataFilters({ ignoreZeroOrInvalidPrice: false, foo: 'bar', ignoreGiftItems: 'yes' });
+assert.equal(sanitized.ignoreZeroOrInvalidPrice, false, '布尔字段保留');
+assert.equal(sanitized.ignoreGiftItems, true, '非布尔回退到默认');
+assert.equal(sanitized.ignoreEmptyCategory, false, '缺失字段使用默认值');
+
+console.log('dashboard metrics tests passed');
