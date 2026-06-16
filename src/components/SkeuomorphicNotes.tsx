@@ -38,6 +38,18 @@ interface SkeuomorphicNotesProps {
   authUser?: CloudbaseAuthUser | null;
 }
 
+/** 把任意值安全转成有限数字，无效时返回 0；防 `.toFixed is not a function` 崩溃 */
+function toSafeNumber(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value === null || value === undefined || value === '') return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatYuan(value: unknown): string {
+  return toSafeNumber(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export default function SkeuomorphicNotes({
   purchaseOrders,
   activePOId,
@@ -743,7 +755,7 @@ export default function SkeuomorphicNotes({
                               负责人: <strong className="text-slate-950 font-semibold">采购二组</strong>
                             </div>
                             <div>
-                              总金额: <strong className="text-slate-950 font-mono font-bold">¥{(selectedPO.items.reduce((sum, item) => sum + (item.orderedQty * item.price), 0) * (1 - (selectedPO.discountRate || 0)) - (selectedPO.discountAmount || 0)).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                              总金额: <strong className="text-slate-950 font-mono font-bold">¥{formatYuan(selectedPO.items.reduce((sum, item) => sum + (toSafeNumber(item.orderedQty) * toSafeNumber(item.price)), 0) * (1 - toSafeNumber(selectedPO.discountRate)) - toSafeNumber(selectedPO.discountAmount))}</strong>
                             </div>
                             <div>
                               到货期望期: <strong className="text-slate-950 font-mono font-bold">{selectedPO.deliveryDate}</strong>
@@ -822,14 +834,14 @@ export default function SkeuomorphicNotes({
                                     </div>
                                     <div className="flex items-center justify-between font-mono text-[9px] border-t border-slate-900/5 pt-1 mt-1">
                                       <span className="text-slate-500">
-                                        ¥{item.price.toFixed(2)} / {item.unit}
+                                        ¥{toSafeNumber(item.price).toFixed(2)} / {item.unit}
                                       </span>
                                       <span className="font-extrabold text-slate-900">
-                                        Qty: {item.orderedQty}
+                                        Qty: {toSafeNumber(item.orderedQty).toLocaleString()}
                                       </span>
                                     </div>
                                     <div className="text-right text-[9px] font-mono font-black text-slate-800">
-                                      小计: ¥{(item.orderedQty * item.price).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      小计: ¥{formatYuan(toSafeNumber(item.orderedQty) * toSafeNumber(item.price))}
                                     </div>
                                   </div>
                                 ))}
