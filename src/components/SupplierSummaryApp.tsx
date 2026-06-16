@@ -37,10 +37,35 @@ interface SupplierSummary {
   materials: MaterialQuote[];
 }
 
+/**
+ * 判断当前 OrderItem 是否是赠品。
+ *
+ * 系统里目前没有显式的"赠品"字段，所以只靠现有字段里的文字标志识别：
+ * - item.remark / item.category / po.remarks 里包含"赠品" / "赠送" / "赠"
+ *
+ * 如果某行没有任何这类标志，**不会**被当作赠品（即按用户要求"如果字段
+ * 中没有赠品字段，则忽略，不要修改"，保持现有聚合行为）。
+ */
+function isGiftItem(
+  item: PurchaseOrder['items'][number],
+  poRemarks: string,
+): boolean {
+  const haystacks = [
+    typeof item.remark === 'string' ? item.remark : '',
+    typeof item.category === 'string' ? item.category : '',
+    typeof poRemarks === 'string' ? poRemarks : '',
+  ].join(' ');
+  return /赠品|赠送|^赠|\s赠/.test(haystacks);
+}
+
 function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
   const map = new Map<string, {
     orders: PurchaseOrder[];
-    materialMap: Map<string, MaterialQuote & { _priceSamples: { price: number; qty: number; date: string }[] }>;
+    materialMap: Map<string, MaterialQuote & {
+      _priceSamples: { price: number; qty: number; date: string }[];
+      // 用于判定"该物料是否曾出现过非赠品行"——若全是赠品，价格统计退化为 0
+      _hasNonGiftSample: boolean;
+    }>;
   }>();
 
   for (const po of orders) {
@@ -54,35 +79,48 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
 
     for (const item of po.items) {
       const key = item.code || item.name;
+      const itemPrice = Number(item.price) || 0;
+      const isGift = isGiftItem(item, po.remarks);
       let mat = bucket.materialMap.get(key);
       if (!mat) {
-        const price = Number(item.price) || 0;
         mat = {
           code: item.code,
           name: item.name,
           spec: item.spec,
           unit: item.unit,
-          lastPrice: price,
-          minPrice: price,
-          maxPrice: price,
-          avgPrice: price,
+          // 首次出现就是赠品时，价格初始化为 0；后续有非赠品行会覆盖
+          lastPrice: isGift ? 0 : itemPrice,
+          minPrice: isGift ? Number.POSITIVE_INFINITY : itemPrice,
+          maxPrice: isGift ? 0 : itemPrice,
+          avgPrice: isGift ? 0 : itemPrice,
           totalQty: 0,
           orderCount: 0,
           lastDate: po.date,
           _priceSamples: [],
+          _hasNonGiftSample: !isGift,
         };
         bucket.materialMap.set(key, mat);
       }
+      // 累计数量与订单数：赠品也算（用户能看到出现次数）
       mat.totalQty += Number(item.orderedQty) || 0;
       mat.orderCount += 1;
-      const itemPrice = Number(item.price) || 0;
-      mat.minPrice = Math.min(mat.minPrice, itemPrice);
-      mat.maxPrice = Math.max(mat.maxPrice, itemPrice);
-      if (po.date.localeCompare(mat.lastDate) >= 0) {
-        mat.lastDate = po.date;
-        mat.lastPrice = itemPrice;
+
+      if (!isGift) {
+        // 仅非赠品参与价格统计（最低价 / 最近单价的绿色高亮基于 minPrice）
+        mat._hasNonGiftSample = true;
+        mat.minPrice = Math.min(mat.minPrice, itemPrice);
+        mat.maxPrice = Math.max(mat.maxPrice, itemPrice);
+        if (po.date.localeCompare(mat.lastDate) >= 0) {
+          mat.lastDate = po.date;
+          mat.lastPrice = itemPrice;
+        }
+        mat._priceSamples.push({ price: itemPrice, qty: Number(item.orderedQty) || 0, date: po.date });
+      } else {
+        // 赠品行只更新最近日期（不更新 lastPrice），让"最近日期"列仍能反映用户最近一次拿到这个物料
+        if (po.date.localeCompare(mat.lastDate) >= 0) {
+          mat.lastDate = po.date;
+        }
       }
-      mat._priceSamples.push({ price: itemPrice, qty: Number(item.orderedQty) || 0, date: po.date });
     }
   }
 
@@ -106,8 +144,16 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
       const totalWeighted = mat._priceSamples.reduce((sum, s) => sum + s.price * s.qty, 0);
       const totalWeight = mat._priceSamples.reduce((sum, s) => sum + s.qty, 0);
       mat.avgPrice = totalWeight > 0 ? totalWeighted / totalWeight : mat.lastPrice;
-      const { _priceSamples, ...clean } = mat;
+      // 极端情况：该物料从未有过非赠品行 → minPrice 仍是 Infinity，归零展示
+      if (!mat._hasNonGiftSample) {
+        mat.minPrice = 0;
+        mat.lastPrice = 0;
+        mat.maxPrice = 0;
+        mat.avgPrice = 0;
+      }
+      const { _priceSamples, _hasNonGiftSample, ...clean } = mat;
       void _priceSamples;
+      void _hasNonGiftSample;
       materials.push(clean);
     }
     materials.sort((a, b) => b.totalQty - a.totalQty);
