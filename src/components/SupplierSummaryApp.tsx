@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Search, Briefcase, Package, Calendar, Star } from 'lucide-react';
+import { ChevronDown, ChevronRight, Search, Briefcase, Package, Calendar, Star, X } from 'lucide-react';
+import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { PurchaseOrder } from '../types';
 
 interface SupplierSummaryAppProps {
   purchaseOrders: PurchaseOrder[];
+}
+
+/** 价格趋势中的一个数据点（来自一笔非赠品订单行）。 */
+interface PricePoint {
+  date: string;       // YYYY-MM-DD
+  price: number;      // 单价
+  qty: number;        // 数量
+  orderId: string;    // 单据编号
+  remark: string;     // 行备注
 }
 
 interface MaterialQuote {
@@ -25,6 +35,8 @@ interface MaterialQuote {
   orderCount: number;
   /** 最近一次出现的日期 */
   lastDate: string;
+  /** 该物料的所有非赠品价格历史（按日期升序） */
+  priceHistory: PricePoint[];
 }
 
 interface SupplierSummary {
@@ -96,6 +108,7 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
           totalQty: 0,
           orderCount: 0,
           lastDate: po.date,
+          priceHistory: [],
           _priceSamples: [],
           _hasNonGiftSample: !isGift,
         };
@@ -115,6 +128,13 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
           mat.lastPrice = itemPrice;
         }
         mat._priceSamples.push({ price: itemPrice, qty: Number(item.orderedQty) || 0, date: po.date });
+        mat.priceHistory.push({
+          date: po.date,
+          price: itemPrice,
+          qty: Number(item.orderedQty) || 0,
+          orderId: po.id,
+          remark: typeof item.remark === 'string' ? item.remark : '',
+        });
       } else {
         // 赠品行只更新最近日期（不更新 lastPrice），让"最近日期"列仍能反映用户最近一次拿到这个物料
         if (po.date.localeCompare(mat.lastDate) >= 0) {
@@ -151,6 +171,8 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
         mat.maxPrice = 0;
         mat.avgPrice = 0;
       }
+      // 价格历史按日期升序排序，方便折线图直接渲染
+      mat.priceHistory.sort((a, b) => a.date.localeCompare(b.date));
       const { _priceSamples, _hasNonGiftSample, ...clean } = mat;
       void _priceSamples;
       void _hasNonGiftSample;
@@ -175,10 +197,183 @@ function aggregateSuppliers(orders: PurchaseOrder[]): SupplierSummary[] {
 
 type SortField = 'totalAmount' | 'orderCount' | 'materialCount' | 'latestDate';
 
+/**
+ * 股票折线风格的迷你价格走势图。
+ * - 上涨：玫红 / 下跌：翠绿（A 股配色），首尾价相比决定整体涨跌色调
+ * - 渐变填充 + 末值点
+ * - 仅一个数据点时显示一条横线
+ */
+function PriceSparkline({ history, width = 140, height = 36 }: {
+  history: PricePoint[];
+  width?: number;
+  height?: number;
+}) {
+  if (history.length === 0) {
+    return <span className="text-[10px] text-slate-300">—</span>;
+  }
+  const first = history[0].price;
+  const last = history[history.length - 1].price;
+  const isUp = last >= first;
+  const stroke = isUp ? '#dc2626' : '#16a34a';   // A 股：涨红跌绿
+  const fillId = `spark-${isUp ? 'up' : 'down'}`;
+
+  // 把单一点扩展成两点防止 recharts 把单点画成空图
+  const data = history.length === 1
+    ? [{ ...history[0], idx: 0 }, { ...history[0], idx: 1 }]
+    : history.map((h, i) => ({ ...h, idx: i }));
+
+  return (
+    <div style={{ width, height }} className="cursor-pointer pointer-events-none">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 2, right: 4, bottom: 2, left: 4 }}>
+          <defs>
+            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={stroke} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={stroke} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis dataKey="idx" hide />
+          <YAxis hide domain={['dataMin', 'dataMax']} />
+          <Area type="monotone" dataKey="price" stroke={stroke} strokeWidth={1.5} fill={`url(#${fillId})`} dot={false} isAnimationActive={false} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * 价格趋势详情抽屉（点击折线图触发）。
+ * 顶部大图 + 涨跌摘要，下部时间倒序订单列表。
+ */
+function PriceTrendDrawer({ supplier, material, onClose }: {
+  supplier: string;
+  material: MaterialQuote;
+  onClose: () => void;
+}) {
+  const history = material.priceHistory;
+  const first = history[0]?.price ?? 0;
+  const last = history.at(-1)?.price ?? 0;
+  const change = last - first;
+  const changePct = first > 0 ? (change / first) * 100 : 0;
+  const isUp = change >= 0;
+  const stroke = isUp ? '#dc2626' : '#16a34a';
+  const sortedDesc = [...history].sort((a, b) => b.date.localeCompare(a.date));
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40">
+      <div className="absolute inset-0" onClick={onClose} />
+      <div className="relative flex h-full w-full max-w-2xl flex-col bg-white shadow-2xl">
+        {/* 头部 */}
+        <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+              <Briefcase className="h-3 w-3" /> {supplier}
+            </div>
+            <h2 className="mt-1 truncate text-base font-bold text-slate-900" title={material.name}>{material.name}</h2>
+            <p className="mt-0.5 truncate text-[11px] font-mono text-slate-500" title={`${material.code} · ${material.spec}`}>
+              {material.code} · {material.spec} · {material.unit}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+        </div>
+
+        {/* 摘要数字 */}
+        <div className="grid grid-cols-4 border-b border-slate-200 bg-slate-50 px-5 py-3 text-center">
+          <div>
+            <p className="text-[10px] text-slate-400">最新</p>
+            <p className="font-mono text-base font-bold text-slate-800">¥{last.toFixed(2)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] text-slate-400">区间涨跌</p>
+            <p className="font-mono text-base font-bold" style={{ color: stroke }}>
+              {isUp ? '+' : ''}{change.toFixed(2)} ({isUp ? '+' : ''}{changePct.toFixed(1)}%)
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] text-slate-400">最低 / 最高</p>
+            <p className="font-mono text-xs font-bold text-slate-700">
+              <span className="text-emerald-600">¥{material.minPrice.toFixed(2)}</span>
+              <span className="px-1 text-slate-300">|</span>
+              <span className="text-rose-600">¥{material.maxPrice.toFixed(2)}</span>
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] text-slate-400">订单次数</p>
+            <p className="font-mono text-base font-bold text-slate-800">{material.orderCount}</p>
+          </div>
+        </div>
+
+        {/* 大图 */}
+        <div className="border-b border-slate-200 bg-white px-2 py-3" style={{ height: 240 }}>
+          {history.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-xs text-slate-400">该物料暂无非赠品价格历史。</div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={history.map((h, i) => ({ ...h, idx: i }))} margin={{ top: 12, right: 16, bottom: 4, left: 8 }}>
+                <defs>
+                  <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={stroke} stopOpacity={0.3} />
+                    <stop offset="100%" stopColor={stroke} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} domain={['dataMin', 'dataMax']} width={48} tickFormatter={v => `¥${Number(v).toFixed(2)}`} />
+                <Tooltip
+                  formatter={(value: number) => [`¥${Number(value).toFixed(2)}`, '单价']}
+                  labelFormatter={(_, payload) => {
+                    const p = payload?.[0]?.payload as PricePoint | undefined;
+                    return p ? `${p.date} · ${p.orderId}` : '';
+                  }}
+                  contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #e2e8f0' }}
+                />
+                <Area type="monotone" dataKey="price" stroke={stroke} strokeWidth={2} fill="url(#trend-fill)" dot={{ r: 3, fill: stroke }} activeDot={{ r: 5 }} isAnimationActive={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* 订单列表 */}
+        <div className="flex-1 overflow-auto px-5 py-3">
+          <p className="mb-2 text-[10px] font-bold uppercase text-slate-400">订单列表（按日期倒序）</p>
+          {sortedDesc.length === 0 ? (
+            <p className="py-8 text-center text-xs text-slate-400">暂无订单</p>
+          ) : (
+            <table className="w-full text-[11px] font-mono">
+              <thead className="sticky top-0 bg-white">
+                <tr className="border-b border-slate-200 text-[10px] uppercase text-slate-500">
+                  <th className="py-1.5 text-left font-bold">日期</th>
+                  <th className="py-1.5 text-left font-bold">单据编号</th>
+                  <th className="py-1.5 text-right font-bold">单价</th>
+                  <th className="py-1.5 text-right font-bold">数量</th>
+                  <th className="py-1.5 text-right font-bold">金额</th>
+                  <th className="py-1.5 text-left font-bold">备注</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedDesc.map((p, idx) => (
+                  <tr key={p.orderId + idx} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="py-1.5 text-slate-600">{p.date}</td>
+                    <td className="py-1.5 text-blue-600">{p.orderId}</td>
+                    <td className="py-1.5 text-right font-bold text-slate-800">¥{p.price.toFixed(2)}</td>
+                    <td className="py-1.5 text-right text-slate-600">{p.qty.toLocaleString()}</td>
+                    <td className="py-1.5 text-right text-slate-700">¥{(p.price * p.qty).toFixed(2)}</td>
+                    <td className="py-1.5 max-w-[160px] truncate text-slate-500" title={p.remark}>{p.remark || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAppProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<SortField>('totalAmount');
   const [expandedSuppliers, setExpandedSuppliers] = useState<Set<string>>(new Set());
+  const [trendTarget, setTrendTarget] = useState<{ supplier: string; material: MaterialQuote } | null>(null);
 
   const allSummaries = useMemo(() => aggregateSuppliers(purchaseOrders), [purchaseOrders]);
 
@@ -374,6 +569,7 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
                           <thead>
                             <tr className="text-slate-500 text-[10px] uppercase border-b border-slate-200">
                               <th className="text-left p-2 font-bold">物料</th>
+                              <th className="text-center p-2 font-bold">价格趋势</th>
                               <th className="text-right p-2 font-bold">最近单价</th>
                               <th className="text-right p-2 font-bold">均价</th>
                               <th className="text-right p-2 font-bold">最低价</th>
@@ -385,7 +581,7 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
                           </thead>
                           <tbody>
                             {summary.materials.map(mat => {
-                              const isBestPrice = mat.lastPrice === mat.minPrice && mat.minPrice !== mat.maxPrice;
+                              const isBestPrice = mat.minPrice > 0 && mat.lastPrice === mat.minPrice && mat.minPrice !== mat.maxPrice;
                               return (
                                 <tr key={mat.code + '-' + mat.name} className="border-b border-slate-100 hover:bg-white">
                                   <td className="p-2 align-top">
@@ -397,12 +593,25 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
                                       </div>
                                     </div>
                                   </td>
+                                  <td className="p-2 align-middle">
+                                    <button
+                                      type="button"
+                                      onClick={() => setTrendTarget({ supplier: summary.name, material: mat })}
+                                      className="group inline-flex items-center justify-center rounded hover:bg-slate-50 cursor-pointer disabled:cursor-default disabled:opacity-40"
+                                      disabled={mat.priceHistory.length === 0}
+                                      title={mat.priceHistory.length === 0 ? '暂无价格历史' : '点击查看价格趋势详情'}
+                                    >
+                                      <PriceSparkline history={mat.priceHistory} />
+                                    </button>
+                                  </td>
                                   <td className={`p-2 text-right font-bold ${isBestPrice ? 'text-emerald-600' : 'text-slate-700'}`}>
                                     {isBestPrice && <Star className="inline w-3 h-3 mr-0.5 fill-emerald-500 text-emerald-500" />}
                                     ¥{mat.lastPrice.toFixed(2)}
                                   </td>
                                   <td className="p-2 text-right text-slate-600">¥{mat.avgPrice.toFixed(2)}</td>
-                                  <td className="p-2 text-right text-emerald-600">¥{mat.minPrice.toFixed(2)}</td>
+                                  <td className="p-2 text-right text-emerald-600">
+                                    {mat.minPrice > 0 ? `¥${mat.minPrice.toFixed(2)}` : <span className="text-slate-300">—</span>}
+                                  </td>
                                   <td className="p-2 text-right text-rose-600">¥{mat.maxPrice.toFixed(2)}</td>
                                   <td className="p-2 text-right text-slate-700">
                                     {mat.totalQty.toLocaleString()} <span className="text-slate-400 font-sans">{mat.unit}</span>
@@ -423,6 +632,15 @@ export default function SupplierSummaryApp({ purchaseOrders }: SupplierSummaryAp
           })
         )}
       </div>
+
+      {/* 价格趋势抽屉 */}
+      {trendTarget && (
+        <PriceTrendDrawer
+          supplier={trendTarget.supplier}
+          material={trendTarget.material}
+          onClose={() => setTrendTarget(null)}
+        />
+      )}
     </div>
   );
 }
