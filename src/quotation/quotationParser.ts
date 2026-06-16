@@ -240,7 +240,20 @@ export function rowsToQuotationDraft(rows: unknown[][]): ParsedQuotation {
     const rawParts = nameColumns.map(idx => text(row[idx])).filter(Boolean);
     if (rawParts.length > 0) item.sourceRawText = rawParts.join(' ');
     return item;
-  }).filter(item => item.sourceProductName || item.sourceProductCode);
+  }).filter(item => (
+    // 只要标识列任一非空即保留，避免纯数字 ID（型号列单独 = "8516"）被当成空行丢弃
+    Boolean(item.sourceProductName)
+    || Boolean(item.sourceProductCode)
+    || Boolean(item.sourceSpecification)
+    || Boolean(item.sourceRawText)
+  )).map(item => {
+    // 若 name 空但其他标识列有值（如型号 = 8516、规格 = 0.5mm），把 raw 顶给 name
+    if (!item.sourceProductName) {
+      const fallback = item.sourceProductCode || item.sourceRawText || item.sourceSpecification;
+      if (fallback) item.sourceProductName = fallback;
+    }
+    return item;
+  });
 
   const taxText = metadata.get('税率') ?? '0';
   const currency = (metadata.get('币种') ?? priceContext.currency).toUpperCase();
@@ -311,6 +324,9 @@ export function findMissingRawTokens(
 /**
  * 对单条解析结果做"无损保留"修复：name + code + spec 的拼接必须覆盖 sourceRawText
  * 中的所有 token，否则把缺失片段补到 spec 末尾。
+ *
+ * 特殊场景：name 和 code 都为空、但 raw 里有内容 → 把 raw 整体补到 name
+ * （处理"型号列只有数字 8516，name 应该等于 8516"这类）。
  */
 export function reconcileItemAgainstRaw(item: ParsedQuotationItem): {
   item: ParsedQuotationItem;
@@ -319,6 +335,19 @@ export function reconcileItemAgainstRaw(item: ParsedQuotationItem): {
 } {
   const raw = (item.sourceRawText ?? '').trim();
   if (!raw) return { item, recovered: false, recoveredText: '' };
+
+  // 兜底 1：name 和 code 都为空，但 raw 有内容 → 把 raw 当 name（保留纯数字 ID）
+  const hasName = Boolean(item.sourceProductName.trim());
+  const hasCode = Boolean(item.sourceProductCode.trim());
+  if (!hasName && !hasCode) {
+    return {
+      item: { ...item, sourceProductName: raw },
+      recovered: true,
+      recoveredText: raw,
+    };
+  }
+
+  // 兜底 2：name + code + spec 没覆盖 raw 的全部 token → 把缺失部分补到 spec 末尾
   const combined = [item.sourceProductName, item.sourceSpecification, item.sourceProductCode]
     .filter(Boolean).join(' ');
   const { missingText } = findMissingRawTokens(raw, combined);

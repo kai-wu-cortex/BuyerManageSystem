@@ -160,6 +160,97 @@ const losslessValidation = validateParsedQuotation({
 assert.equal(losslessValidation.value.items[0].sourceSpecification, 'LB100');
 assert.equal(losslessValidation.value.items[0].sourceRawText, '镭射银LB100');
 
+// === 纯数字 ID 场景（型号 8516）===
+
+// 1) 客户端 reconcile：name 和 code 都为空但 raw 是数字 → name=raw
+const numericIdReconcile = reconcileItemAgainstRaw({
+  sourceProductCode: '',
+  sourceProductName: '',
+  sourceSpecification: '',
+  sourceUnit: '',
+  sourcePackageDescription: '',
+  sourcePackageQuantity: 1,
+  sourceUnitPrice: 12.5,
+  minimumOrderQuantity: null,
+  lineLeadTimeDays: null,
+  sourceRawText: '8516',
+  fieldConfidence: {},
+});
+assert.equal(numericIdReconcile.recovered, true);
+assert.equal(numericIdReconcile.item.sourceProductName, '8516');
+assert.equal(numericIdReconcile.item.sourceSpecification, '');
+
+// 2) Gemini 返回 name 空、code 空、raw="8516" → 自动顶到 name
+const numericValidation = validateParsedQuotation({
+  supplierName: '某公司',
+  quotationDate: '2026-06-10',
+  currency: 'CNY',
+  exchangeRateToCny: 1,
+  taxRate: 13,
+  priceTaxMode: 'tax_included',
+  items: [{
+    sourceProductCode: '',
+    sourceProductName: '',
+    sourceSpecification: '',
+    sourceUnit: 'kg',
+    sourcePackageDescription: '',
+    sourcePackageQuantity: 1,
+    sourceUnitPrice: 100,
+    minimumOrderQuantity: null,
+    lineLeadTimeDays: null,
+    sourceRawText: '8516',
+    fieldConfidence: {},
+  }],
+});
+assert.equal(numericValidation.value.items[0].sourceProductName, '8516');
+
+// 3) Gemini 返回时把 8516 当成 number → text() 兜底转字符串
+const numberAsName = validateParsedQuotation({
+  supplierName: '某公司', quotationDate: '2026-06-10', currency: 'CNY',
+  exchangeRateToCny: 1, taxRate: 13, priceTaxMode: 'tax_included',
+  items: [{
+    sourceProductCode: '',
+    sourceProductName: 8516 as unknown as string, // 模型偷懒返回数字
+    sourceSpecification: '0.5mm',
+    sourceUnit: 'kg', sourcePackageDescription: '',
+    sourcePackageQuantity: 1, sourceUnitPrice: 100,
+    minimumOrderQuantity: null, lineLeadTimeDays: null,
+    sourceRawText: '8516 0.5mm',
+    fieldConfidence: {},
+  }],
+});
+assert.equal(numberAsName.value.items[0].sourceProductName, '8516');
+
+// 4) 内部算法：纯数字型号列也要被保留（不会因为 name 列为空而误删）
+const numericRowsDraft = rowsToQuotationDraft([
+  ['产品编码', '产品名称', '规格', '单位', '包装数量', '单价'],
+  ['', '8516', '', 'kg', 10, 25.5],         // 名字本身是 8516
+  ['', '', '3025', 'kg', 5, 30.0],          // name 空、规格列="3025"（也是 ID）
+]);
+assert.equal(numericRowsDraft.items.length, 2, '纯数字 ID 行不能被过滤掉');
+assert.equal(numericRowsDraft.items[0].sourceProductName, '8516');
+// row 2: name 空，但 spec="3025" → 兜底把 raw 顶给 name
+assert.match(numericRowsDraft.items[1].sourceProductName, /3025/);
+assert.match(numericRowsDraft.items[1].sourceRawText ?? '', /3025/);
+
+// 5) 前导零保留（"008516" ≠ 8516）
+const leadingZero = validateParsedQuotation({
+  supplierName: '某公司', quotationDate: '2026-06-10', currency: 'CNY',
+  exchangeRateToCny: 1, taxRate: 13, priceTaxMode: 'tax_included',
+  items: [{
+    sourceProductCode: '008516',
+    sourceProductName: '008516',
+    sourceSpecification: '',
+    sourceUnit: 'kg', sourcePackageDescription: '',
+    sourcePackageQuantity: 1, sourceUnitPrice: 100,
+    minimumOrderQuantity: null, lineLeadTimeDays: null,
+    sourceRawText: '008516',
+    fieldConfidence: {},
+  }],
+});
+assert.equal(leadingZero.value.items[0].sourceProductName, '008516', '前导零必须保留');
+assert.equal(leadingZero.value.items[0].sourceProductCode, '008516');
+
 // rowsToQuotationDraft 也填充 sourceRawText
 const rawTextDraft = rowsToQuotationDraft([
   ['产品编码', '产品名称', '规格', '单位', '包装数量', '单价'],
