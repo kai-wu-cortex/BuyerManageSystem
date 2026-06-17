@@ -1238,7 +1238,8 @@ export default function Dashboard({
               onDragOver={(e) => e.preventDefault()}
               className={`${colSpanClass} ${draggedModule === id ? 'opacity-30 scale-[0.98]' : 'opacity-100'} transition-all duration-300 transform relative group cursor-move`}
             >
-              <div className="absolute bottom-2 right-2 z-10 flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white/90 p-0.5 text-slate-500 shadow-sm backdrop-blur transition-opacity md:opacity-70 md:hover:opacity-100">
+              {/* 桌面端默认隐藏，hover 卡片才浮现；触控设备无 hover，保持 25% 透明度始终可见但不挡内容 */}
+              <div className="absolute bottom-2 right-2 z-10 flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white/90 p-0.5 text-slate-500 shadow-sm backdrop-blur transition-opacity duration-150 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:none)]:opacity-25 [@media(hover:none)]:active:opacity-100">
                 <button
                   onClick={(e) => { e.stopPropagation(); adjustWidth(id, -1); }}
                   disabled={widthInfo <= 1}
