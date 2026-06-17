@@ -1122,6 +1122,10 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
     if (file.size > MAX_SIZE) { setError('报价文件不能超过 25 MB。'); return; }
     setUploading(true);
     setError(null);
+    /** 解析阶段失败时记录原因，最终仍把原始报价单建档保留，等用户在归档页里手动补录 */
+    let parseFailureReason: string | null = null;
+    /** 上传到 Blob 后的源文件元数据；仅当 Blob 上传成功才赋值 */
+    let sourceFile: SourceFileRef | null = null;
     try {
       setUploadProgress('正在上传原始报价文件...');
       const safeName = file.name.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fff]/g, '_');
@@ -1133,24 +1137,52 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
       });
       const checksumBytes = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
       const checksum = Array.from(new Uint8Array(checksumBytes), b => b.toString(16).padStart(2, '0')).join('');
-      const sourceFile: SourceFileRef = { id: id('file'), pathname: blob.pathname, fileName: file.name, mimeType: file.type || 'application/octet-stream', size: file.size, checksum };
+      sourceFile = { id: id('file'), pathname: blob.pathname, fileName: file.name, mimeType: file.type || 'application/octet-stream', size: file.size, checksum };
 
       setUploadProgress('正在解析产品、价格和报价信息...');
       let validation;
-      if (parseMode === 'display') {
-        validation = { valid: true, value: { supplierName: '', quotationNumber: '', quotationDate: new Date().toISOString().slice(0, 10), currency: 'CNY', exchangeRateToCny: 1, taxRate: 0, priceTaxMode: 'tax_included' as const, items: [] }, issues: [] };
-      } else if (ext === 'xlsx' || ext === 'xls') {
-        if (parseMode === 'gemini') {
-          validation = await parseQuotationFile(blob.pathname, file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      try {
+        if (parseMode === 'display') {
+          validation = { valid: true, value: { supplierName: '', quotationNumber: '', quotationDate: new Date().toISOString().slice(0, 10), currency: 'CNY', exchangeRateToCny: 1, taxRate: 0, priceTaxMode: 'tax_included' as const, items: [] }, issues: [] };
+        } else if (ext === 'xlsx' || ext === 'xls') {
+          if (parseMode === 'gemini') {
+            validation = await parseQuotationFile(blob.pathname, file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+          } else {
+            const XLSX = await import('xlsx');
+            const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+            validation = wb.SheetNames.map(sn => validateParsedQuotation(rowsToQuotationDraft(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sn], { header: 1, raw: false, blankrows: false })))).sort((a, b) => b.value.items.length - a.value.items.length)[0];
+          }
         } else {
-          const XLSX = await import('xlsx');
-          const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-          validation = wb.SheetNames.map(sn => validateParsedQuotation(rowsToQuotationDraft(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sn], { header: 1, raw: false, blankrows: false })))).sort((a, b) => b.value.items.length - a.value.items.length)[0];
+          validation = await parseQuotationFile(blob.pathname, sourceFile.mimeType);
         }
-      } else {
-        validation = await parseQuotationFile(blob.pathname, sourceFile.mimeType);
+        if (!validation || validation.value.items.length === 0) {
+          parseFailureReason = '文件中没有读取到产品和价格数据，已保留原始文件，请在归档列表中手动补录明细。';
+        }
+      } catch (parseError) {
+        parseFailureReason = parseError instanceof Error ? parseError.message : String(parseError);
       }
-      if (!validation || validation.value.items.length === 0) throw new Error('文件中没有读取到产品和价格数据。');
+
+      if (parseFailureReason || !validation) {
+        // 解析失败兜底：仍建档保留原始文件，summary 写入失败原因，items 留空
+        const fallbackParsed = {
+          supplierName: '',
+          quotationNumber: '',
+          quotationDate: new Date().toISOString().slice(0, 10),
+          currency: 'CNY',
+          exchangeRateToCny: 1,
+          taxRate: 0,
+          priceTaxMode: 'tax_included' as const,
+          items: [],
+        };
+        const { draft, supplier } = makeDraft(fallbackParsed, sourceFile, undefined);
+        draft.quotation.summary = `自动解析失败：${parseFailureReason ?? '未知原因'}`;
+        setUploadProgress('解析未成功，正在保留原始文件...');
+        await Promise.all([saveSupplierProfile(supplier), saveQuotationDraft(draft)]);
+        await onRefresh();
+        setShowUpload(false);
+        setError(`已成功上传报价单原文件，但解析未完成：${parseFailureReason ?? '未知原因'}。可在报价归档中找到该记录并手动录入明细。`);
+        return;
+      }
 
       const existingSupplier = workspace.suppliers.find(s => !s.deletedAt && s.normalizedName === normalizedSupplierName(validation.value.supplierName));
       const { draft, supplier } = makeDraft(validation.value, sourceFile, existingSupplier);
@@ -1161,7 +1193,34 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
       await onRefresh();
       setShowUpload(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      // 走到这里说明 Blob 上传或保存阶段就抛错；尽力告知用户实际状态
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (sourceFile) {
+        // Blob 已上传成功但保存草稿失败：尝试再做一次"仅保留原文件"的兜底建档
+        try {
+          const fallbackParsed = {
+            supplierName: '',
+            quotationNumber: '',
+            quotationDate: new Date().toISOString().slice(0, 10),
+            currency: 'CNY',
+            exchangeRateToCny: 1,
+            taxRate: 0,
+            priceTaxMode: 'tax_included' as const,
+            items: [],
+          };
+          const { draft, supplier } = makeDraft(fallbackParsed, sourceFile, undefined);
+          draft.quotation.summary = `保存草稿失败，原始文件已保留：${message}`;
+          await Promise.all([saveSupplierProfile(supplier), saveQuotationDraft(draft)]);
+          await onRefresh();
+          setShowUpload(false);
+          setError(`已成功上传报价单原文件，但首次保存出错（${message}），已保留原文件供后续手动补录。`);
+          return;
+        } catch (fallbackErr) {
+          setError(`原文件已上传，但保存记录失败：${message}。建议刷新后重试。详情：${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+          return;
+        }
+      }
+      setError(message);
     } finally {
       setUploading(false);
       setUploadProgress('');
