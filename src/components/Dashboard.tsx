@@ -809,6 +809,7 @@ export default function Dashboard({
                   ['ignoreVoidedOrders', '忽略作废订单', '单据备注 / 状态包含"作废/取消/废弃"的整单'],
                   ['ignoreEmptySupplier', '忽略空白供应商的整单', '供应商列空白时整单不计入'],
                   ['ignoreEmptyCategory', '忽略空白物料类别的行', '仅影响"按类别"的统计'],
+                  ['ignoreOtherMonth', '忽略单据月份为“其他”的订单', '日期为空 / 未知 / 无法解析成 YYYY-MM 时整单不计入'],
                 ] as const).map(([key, label, hint]) => (
                   <label key={key} className="flex min-h-16 cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/40 p-3 text-xs text-slate-600 hover:bg-white active:scale-[0.99]">
                     <input
@@ -841,6 +842,7 @@ export default function Dashboard({
                     ignoreVoidedOrders: false,
                     ignoreEmptySupplier: false,
                     ignoreEmptyCategory: false,
+                    ignoreOtherMonth: false,
                   })}
                   className="min-h-10 rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200 active:scale-[0.98]"
                 >
@@ -1236,27 +1238,27 @@ export default function Dashboard({
               onDragOver={(e) => e.preventDefault()}
               className={`${colSpanClass} ${draggedModule === id ? 'opacity-30 scale-[0.98]' : 'opacity-100'} transition-all duration-300 transform relative group cursor-move`}
             >
-              <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-xl border border-slate-200 bg-white/95 p-1 text-slate-600 shadow-md backdrop-blur transition-shadow hover:shadow-lg">
+              <div className="absolute bottom-2 right-2 z-10 flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white/90 p-0.5 text-slate-500 shadow-sm backdrop-blur transition-opacity md:opacity-70 md:hover:opacity-100">
                 <button
                   onClick={(e) => { e.stopPropagation(); adjustWidth(id, -1); }}
                   disabled={widthInfo <= 1}
-                  className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-slate-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-slate-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30"
                   title="缩小宽度"
                   aria-label="缩小模块宽度"
                 >
-                  <ChevronLeft className="w-5 h-5" />
+                  <ChevronLeft className="w-4 h-4" />
                 </button>
-                <div className="flex h-10 w-10 cursor-move items-center justify-center rounded-lg text-slate-400" title="拖拽排序" aria-label="拖拽排序">
-                  <GripHorizontal className="w-5 h-5" />
+                <div className="flex h-8 w-7 cursor-move items-center justify-center rounded-md text-slate-400" title="拖拽排序" aria-label="拖拽排序">
+                  <GripHorizontal className="w-4 h-4" />
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); adjustWidth(id, 1); }}
                   disabled={widthInfo >= 3}
-                  className="flex h-10 w-10 items-center justify-center rounded-lg hover:bg-slate-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30"
+                  className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-slate-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-30"
                   title="放大宽度"
                   aria-label="放大模块宽度"
                 >
-                  <ChevronRight className="w-5 h-5" />
+                  <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
               {mod.content}

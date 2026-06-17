@@ -33,6 +33,8 @@ export interface DashboardDataFilters {
   ignoreEmptySupplier: boolean;
   /** 物料类别为空白的行不计入（仅影响 categorySpend / 按类别 breakdown） */
   ignoreEmptyCategory: boolean;
+  /** 单据月份为“其他/未知/空白”或无法解析为 YYYY-MM 的整单不计入 */
+  ignoreOtherMonth: boolean;
 }
 
 export const DEFAULT_DASHBOARD_DATA_FILTERS: DashboardDataFilters = {
@@ -42,6 +44,7 @@ export const DEFAULT_DASHBOARD_DATA_FILTERS: DashboardDataFilters = {
   ignoreVoidedOrders: false,
   ignoreEmptySupplier: false,
   ignoreEmptyCategory: false,
+  ignoreOtherMonth: false,
 };
 
 export function sanitizeDashboardDataFilters(value: unknown): DashboardDataFilters {
@@ -95,6 +98,20 @@ const VOID_RE = /作废|取消|废弃/;
 function isOrderVoided(po: PurchaseOrder): boolean {
   const haystack = [po.status ?? '', po.executionStatus ?? '', po.inboundStatus ?? '', po.remarks ?? ''].join(' ');
   return VOID_RE.test(haystack);
+}
+
+function getOrderMonth(po: PurchaseOrder): string {
+  const raw = String(po.date ?? '').trim();
+  const match = raw.match(/^(\d{4})[-/.年](\d{1,2})/);
+  if (!match) return '其他';
+  const month = Number(match[2]);
+  if (!Number.isInteger(month) || month < 1 || month > 12) return '其他';
+  return `${match[1]}-${String(month).padStart(2, '0')}`;
+}
+
+function isOtherMonthOrder(po: PurchaseOrder): boolean {
+  const month = getOrderMonth(po);
+  return month === '其他' || month === '未知月份' || month === '空白';
 }
 
 function isLineGift(item: PurchaseOrder['items'][number], poRemarks: string): boolean {
@@ -207,6 +224,7 @@ export function buildLedgerBreakdown(
 
   for (const po of purchaseOrders) {
     if (filters.ignoreVoidedOrders && isOrderVoided(po)) continue;
+    if (filters.ignoreOtherMonth && isOtherMonthOrder(po)) continue;
     if (filters.ignoreEmptySupplier && !String(po.supplier ?? '').trim()) continue;
     for (const item of po.items) {
       if (isLineExcluded(item, po.remarks, filters)) continue;
@@ -239,11 +257,15 @@ export function buildDashboardMetrics(
       excludedLineCount += po.items.length;
       continue;
     }
+    if (filters.ignoreOtherMonth && isOtherMonthOrder(po)) {
+      excludedLineCount += po.items.length;
+      continue;
+    }
     if (filters.ignoreEmptySupplier && !String(po.supplier ?? '').trim()) {
       excludedLineCount += po.items.length;
       continue;
     }
-    const month = String(po.date || '').substring(0, 7) || '未知月份';
+    const month = getOrderMonth(po);
     const supplier = String(po.supplier || '').trim() || '未知供应商';
 
     po.items.forEach(item => {

@@ -275,6 +275,7 @@ const noFilters = buildDashboardMetrics([dirtyOrder], {
     ignoreVoidedOrders: false,
     ignoreEmptySupplier: false,
     ignoreEmptyCategory: false,
+    ignoreOtherMonth: false,
   },
 });
 // price=NaN(*qty)=NaN 会让 getLineGrossAmount 返 0；其他 0 价/0 量都返 0
@@ -312,10 +313,29 @@ const breakdownWithFilters = buildLedgerBreakdown([dirtyOrder], {
 });
 assert.deepEqual(breakdownWithFilters, [{ name: '原材料', value: 1000 }], 'breakdown 默认过滤掉脏行');
 
-// 7) sanitizeDashboardDataFilters：垃圾输入被规范化
+// 7) 忽略单据月份为“其他”的整单
+const otherMonthOrder = po({
+  id: 'PO-OTHER-MONTH',
+  date: '其他',
+  items: [{ code: 'OM', name: '其他月份', spec: '', category: '原材料', unit: 'PCS', orderedQty: 10, price: 100, taxAmount: 0, remark: '', receivedQty: 0 }],
+});
+const withOtherMonth = buildDashboardMetrics([dirtyOrder, otherMonthOrder]);
+assert.equal(withOtherMonth.totalAmount, 2000, '默认不忽略其他月份');
+const withoutOtherMonth = buildDashboardMetrics([dirtyOrder, otherMonthOrder], {
+  filters: { ...DEFAULT_DASHBOARD_DATA_FILTERS, ignoreOtherMonth: true },
+});
+assert.equal(withoutOtherMonth.totalAmount, 1000, '开启后其他月份整单不计入');
+assert.deepEqual(
+  buildLedgerBreakdown([dirtyOrder, otherMonthOrder], { groupBy: 'month', metric: 'amount', filters: { ...DEFAULT_DASHBOARD_DATA_FILTERS, ignoreOtherMonth: true } }),
+  [{ name: '2026-06', value: 1000 }],
+  'breakdown 同样忽略其他月份',
+);
+
+// 8) sanitizeDashboardDataFilters：垃圾输入被规范化
 const sanitized = sanitizeDashboardDataFilters({ ignoreZeroOrInvalidPrice: false, foo: 'bar', ignoreGiftItems: 'yes' });
 assert.equal(sanitized.ignoreZeroOrInvalidPrice, false, '布尔字段保留');
 assert.equal(sanitized.ignoreGiftItems, true, '非布尔回退到默认');
 assert.equal(sanitized.ignoreEmptyCategory, false, '缺失字段使用默认值');
+assert.equal(sanitized.ignoreOtherMonth, false, '新增的其他月份过滤默认关闭');
 
 console.log('dashboard metrics tests passed');
