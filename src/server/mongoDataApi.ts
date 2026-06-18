@@ -29,6 +29,13 @@ type ApiResponse = Pick<Response, 'status' | 'json' | 'setHeader'>;
 
 type MongoRecord = Document & { _id: string };
 
+export function setNoStoreHeaders(res: ApiResponse): void {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+}
+
 function isAllowedCollection(collectionName: string): boolean {
   return ALLOWED_COLLECTIONS.has(collectionName);
 }
@@ -206,6 +213,7 @@ export async function deleteMongoDocument(req: ApiRequest, res: ApiResponse): Pr
 }
 
 export async function handleMongoCollectionRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
+  setNoStoreHeaders(res);
   if (req.method === 'GET') {
     return listMongoDocuments(req, res);
   }
@@ -215,6 +223,7 @@ export async function handleMongoCollectionRequest(req: ApiRequest, res: ApiResp
 }
 
 export async function handleMongoDocumentRequest(req: ApiRequest, res: ApiResponse): Promise<unknown> {
+  setNoStoreHeaders(res);
   if (req.method === 'GET') {
     return getMongoDocument(req, res);
   }

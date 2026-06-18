@@ -155,9 +155,11 @@ globalThis.fetch = originalFetch;
 
 const paginationFetch = globalThis.fetch;
 const requestedOffsets: string[] = [];
+const requestedCacheBusters: string[] = [];
 globalThis.fetch = (async (input: string | URL | Request) => {
   const url = new URL(String(input), 'http://localhost');
   requestedOffsets.push(url.searchParams.get('offset') ?? '');
+  requestedCacheBusters.push(url.searchParams.get('_') ?? '');
   const offset = Number(url.searchParams.get('offset') ?? 0);
   const data = offset === 0
     ? Array.from({ length: 1000 }, (_, index) => ({ id: `item-${index}` }))
@@ -170,12 +172,13 @@ globalThis.fetch = (async (input: string | URL | Request) => {
 const paginatedDocuments = await listDocuments<{ id: string }>('supplier_quotation_items');
 assert.equal(paginatedDocuments.length, 1001, 'listDocuments should load every page instead of truncating at 1000 records');
 assert.deepEqual(requestedOffsets, ['0', '1000']);
+assert.equal(requestedCacheBusters.every(value => value.length > 0), true, 'listDocuments should add a cache buster so browser caches cannot reuse stale pages');
 globalThis.fetch = paginationFetch;
 
 const incompleteChunkFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string | URL | Request) => {
-  const url = String(input);
-  if (url.endsWith('/ledger_backup_chunks/backup-1_chunk_0000')) {
+  const pathname = new URL(String(input), 'http://localhost').pathname;
+  if (pathname.endsWith('/ledger_backup_chunks/backup-1_chunk_0000')) {
     return new Response(JSON.stringify({
       success: true,
       data: {
@@ -210,9 +213,9 @@ globalThis.fetch = incompleteChunkFetch;
 
 const fallbackFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string | URL | Request) => {
-  const url = String(input);
+  const pathname = new URL(String(input), 'http://localhost').pathname;
   // newest backup (backup-broken) 缺一个 chunk → 不完整
-  if (url.endsWith('/ledger_backup_chunks/backup-broken_chunk_0000')) {
+  if (pathname.endsWith('/ledger_backup_chunks/backup-broken_chunk_0000')) {
     return new Response(JSON.stringify({
       success: true,
       data: {
@@ -221,12 +224,12 @@ globalThis.fetch = (async (input: string | URL | Request) => {
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
-  if (url.endsWith('/ledger_backup_chunks/backup-broken_chunk_0001')) {
+  if (pathname.endsWith('/ledger_backup_chunks/backup-broken_chunk_0001')) {
     return new Response(JSON.stringify({ success: false, message: 'gone' }),
       { status: 503, headers: { 'Content-Type': 'application/json' } });
   }
   // older backup (backup-good) 完整两个 chunks
-  if (url.endsWith('/ledger_backup_chunks/backup-good_chunk_0000')) {
+  if (pathname.endsWith('/ledger_backup_chunks/backup-good_chunk_0000')) {
     return new Response(JSON.stringify({
       success: true,
       data: {
@@ -235,7 +238,7 @@ globalThis.fetch = (async (input: string | URL | Request) => {
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
-  if (url.endsWith('/ledger_backup_chunks/backup-good_chunk_0001')) {
+  if (pathname.endsWith('/ledger_backup_chunks/backup-good_chunk_0001')) {
     return new Response(JSON.stringify({
       success: true,
       data: {

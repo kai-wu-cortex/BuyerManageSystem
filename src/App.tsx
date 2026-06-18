@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { PurchaseOrder, InventoryItem, OrderItem, SampleRecord, StickyNote, POStatus, PurchaseExecutionStatus } from './types';
 // xlsx + exceljs 体积大且仅在文件上传时使用，改为函数内 dynamic import 按需加载
 import { parseClipboardLine } from './utils/ledgerHelper';
@@ -402,6 +402,44 @@ export default function App() {
     }
   }, []);
 
+  // Sync state values on changes directly to CloudBase
+  const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
+    const preparedOrders = preparePurchaseOrdersForState(updatedOrders);
+    purchaseOrdersRef.current = preparedOrders;
+    setPurchaseOrders(preparedOrders);
+    setLedgerRevision(revision => revision + 1);
+    try {
+      localStorage.setItem("purchase_orders", JSON.stringify(preparedOrders));
+    } catch (error) {
+      console.warn("localStorage write failed (purchase_orders):", error);
+    }
+  };
+
+  const refreshLatestLedgerBackup = useCallback(async () => {
+    const records = await listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups, { sizeFields: ['orders'] });
+    const latest = getLatestLedgerBackup(records);
+    setLatestRemoteLedgerBackup(latest);
+    if (!shouldLoadLedgerBackup(latest, readStoredLedgerBackupTime(), purchaseOrdersRef.current.length)) {
+      return;
+    }
+
+    const result = await loadLatestCompleteLedgerBackup(records, async summary => {
+      const full = await getDocument<LedgerBackup>(cloudbaseCollections.ledgerBackups, summary.id);
+      return full ?? null;
+    });
+    if (!result) {
+      return;
+    }
+
+    const { backup: backupToLoad, orders: parsedOrders, skipped } = result;
+    if (skipped.length > 0) {
+      console.warn(`已跳过 ${skipped.length} 份不完整备份，使用 ${backupToLoad.timeCreated} 的备份`);
+    }
+    const { merged } = mergePurchaseOrdersById(purchaseOrdersRef.current, parsedOrders);
+    handleUpdateOrders(merged);
+    markLedgerBackupLoaded(backupToLoad.rawTime);
+  }, []);
+
   // Initial load & real-time CloudBase sync
   useEffect(() => {
     if (authStatus !== 'authenticated' || userAccess.mode !== 'full') {
@@ -500,60 +538,54 @@ export default function App() {
         }
       });
 
-    void listDocuments<LedgerBackup>(cloudbaseCollections.ledgerBackups, { sizeFields: ['orders'] })
-      .then(async records => {
-        const latest = getLatestLedgerBackup(records);
-        setLatestRemoteLedgerBackup(latest);
-        if (shouldLoadLedgerBackup(latest, readStoredLedgerBackupTime(), purchaseOrdersRef.current.length)) {
-          try {
-            // 用新的"自动跳过损坏备份"加载器：如果最新备份缺分块，
-            // 自动回退到上一份完整备份，避免出现"台账只加载到 3 月"这类
-            // 由部分写入失败导致的回退现象。
-            const result = await loadLatestCompleteLedgerBackup(records, async summary => {
-              const full = await getDocument<LedgerBackup>(cloudbaseCollections.ledgerBackups, summary.id);
-              return full ?? null;
-            });
-            if (result) {
-              const { backup: backupToLoad, orders: parsedOrders, skipped } = result;
-              if (skipped.length > 0) {
-                console.warn(`已跳过 ${skipped.length} 份不完整备份，使用 ${backupToLoad.timeCreated} 的备份`);
-              }
-              const { merged } = mergePurchaseOrdersById(purchaseOrdersRef.current, parsedOrders);
-              handleUpdateOrders(merged);
-              markLedgerBackupLoaded(backupToLoad.rawTime);
-            }
-          } catch (err) {
-            console.warn('Auto-load latest backup failed:', err);
-          }
-        }
-        setCloudLedgerLoaded(true);
+    void refreshLatestLedgerBackup()
+      .catch(err => {
+        console.warn('Auto-load latest backup failed:', err);
       })
-      .catch(error => {
+      .finally(() => {
         setCloudLedgerLoaded(true);
-        try {
-          handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.ledgerBackups);
-        } catch (handledError) {
-          console.error(handledError);
-        }
       });
 
     return () => {
       clearInterval(clockInterval);
     };
-  }, [authStatus, userAccess.mode]);
+  }, [authStatus, refreshLatestLedgerBackup, userAccess.mode]);
 
-  // Sync state values on changes directly to CloudBase
-  const handleUpdateOrders = (updatedOrders: PurchaseOrder[]) => {
-    const preparedOrders = preparePurchaseOrdersForState(updatedOrders);
-    purchaseOrdersRef.current = preparedOrders;
-    setPurchaseOrders(preparedOrders);
-    setLedgerRevision(revision => revision + 1);
-    try {
-      localStorage.setItem("purchase_orders", JSON.stringify(preparedOrders));
-    } catch (error) {
-      console.warn("localStorage write failed (purchase_orders):", error);
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || userAccess.mode !== 'full' || !cloudLedgerLoaded) {
+      return undefined;
     }
-  };
+
+    let refreshInFlight = false;
+    const refreshAfterResume = () => {
+      if (document.visibilityState === 'hidden' || refreshInFlight) {
+        return;
+      }
+
+      refreshInFlight = true;
+      void refreshLatestLedgerBackup()
+        .catch(error => {
+          try {
+            handleCloudbaseError(error, OperationType.LIST, cloudbaseCollections.ledgerBackups);
+          } catch (handledError) {
+            console.error(handledError);
+          }
+        })
+        .finally(() => {
+          refreshInFlight = false;
+        });
+    };
+
+    window.addEventListener('focus', refreshAfterResume);
+    window.addEventListener('pageshow', refreshAfterResume);
+    document.addEventListener('visibilitychange', refreshAfterResume);
+
+    return () => {
+      window.removeEventListener('focus', refreshAfterResume);
+      window.removeEventListener('pageshow', refreshAfterResume);
+      document.removeEventListener('visibilitychange', refreshAfterResume);
+    };
+  }, [authStatus, cloudLedgerLoaded, refreshLatestLedgerBackup, userAccess.mode]);
 
   const handleUpdateInventory = async (updatedInventory: InventoryItem[]) => {
     try {

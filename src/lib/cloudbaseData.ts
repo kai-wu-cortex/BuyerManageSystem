@@ -277,6 +277,10 @@ function getDataApiPath(collectionName: CollectionName, documentId?: string): st
   return documentId ? `${basePath}/${encodeURIComponent(normalizeCloudbaseDocumentId(documentId))}` : basePath;
 }
 
+function appendNoStoreCacheBuster(url: URL): void {
+  url.searchParams.set('_', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+}
+
 function isBrowserOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
@@ -342,6 +346,7 @@ export async function listDocuments<T>(collectionName: CollectionName, options?:
     }
     url.searchParams.set('offset', String(offset));
     url.searchParams.set('limit', String(pageSize));
+    appendNoStoreCacheBuster(url);
     const path = url.pathname + url.search;
     const response = await fetch(path, { cache: 'no-store' });
     const page = await readJsonResponse<T[]>(response, collectionName);
@@ -351,13 +356,18 @@ export async function listDocuments<T>(collectionName: CollectionName, options?:
 }
 
 export async function getDocument<T>(collectionName: CollectionName, documentId: string): Promise<T | null> {
-  const path = getDataApiPath(collectionName, documentId);
+  const url = new URL(getDataApiPath(collectionName, documentId), typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
+  appendNoStoreCacheBuster(url);
+  const path = url.pathname + url.search;
   const response = await fetch(path, { cache: 'no-store' });
   return readJsonResponse<T | null>(response, path);
 }
 
 async function listDocumentIds(collectionName: CollectionName): Promise<string[]> {
-  const path = `${getDataApiPath(collectionName)}?includeIds=true`;
+  const url = new URL(getDataApiPath(collectionName), typeof window === 'undefined' ? 'http://localhost' : window.location.origin);
+  url.searchParams.set('includeIds', 'true');
+  appendNoStoreCacheBuster(url);
+  const path = url.pathname + url.search;
   const response = await fetch(path, { cache: 'no-store' });
   return readJsonResponse<string[]>(response, collectionName);
 }
