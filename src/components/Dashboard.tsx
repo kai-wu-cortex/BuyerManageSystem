@@ -40,11 +40,13 @@ import {
 import {
   buildDashboardMetrics,
   buildLedgerBreakdown,
+  buildSupplierComparison,
   DEFAULT_DASHBOARD_DATA_FILTERS,
   sanitizeDashboardDataFilters,
   type DashboardDataFilters,
   type LedgerBreakdownField,
   type LedgerBreakdownMetric,
+  type SupplierComparisonPeriodMetric,
 } from '../utils/dashboardMetrics';
 
 interface DashboardProps {
@@ -122,6 +124,7 @@ const DEFAULT_GANTT_FIELDS: DashboardViewSettings['ganttFields'] = {
 };
 const DEFAULT_MODULE_ORDER = [
   'kpis',
+  'supplierComparison',
   'trend',
   'supplier',
   'category',
@@ -130,6 +133,7 @@ const DEFAULT_MODULE_ORDER = [
 ];
 const DEFAULT_MODULE_WIDTHS: DashboardViewSettings['moduleWidths'] = {
   kpis: 3,
+  supplierComparison: 2,
   trend: 2,
   supplier: 1,
   category: 1,
@@ -363,6 +367,28 @@ export default function Dashboard({
     [purchaseOrders, dataFilters],
   );
   const { totalAmount, monthlySpend, supplierSpend, categorySpend, excludedLineCount, includedLineCount } = dashboardMetrics;
+  const [selectedComparisonSupplier, setSelectedComparisonSupplier] = useState('');
+  const [selectedComparisonMonth, setSelectedComparisonMonth] = useState('');
+  const supplierComparison = useMemo(
+    () => buildSupplierComparison(purchaseOrders, {
+      supplier: selectedComparisonSupplier || undefined,
+      month: selectedComparisonMonth || undefined,
+      filters: dataFilters,
+    }),
+    [purchaseOrders, selectedComparisonSupplier, selectedComparisonMonth, dataFilters],
+  );
+
+  useEffect(() => {
+    if (supplierComparison.selectedSupplier && supplierComparison.selectedSupplier !== selectedComparisonSupplier) {
+      setSelectedComparisonSupplier(supplierComparison.selectedSupplier);
+    }
+  }, [supplierComparison.selectedSupplier, selectedComparisonSupplier]);
+
+  useEffect(() => {
+    if (supplierComparison.selectedMonth && supplierComparison.selectedMonth !== selectedComparisonMonth) {
+      setSelectedComparisonMonth(supplierComparison.selectedMonth);
+    }
+  }, [supplierComparison.selectedMonth, selectedComparisonMonth]);
   const [analysisConfigs, setAnalysisConfigs] = useState<Record<string, DashboardAnalysisConfig>>((() => {
     const saved = localStorage.getItem('dashboard_analysis_configs');
     if (saved) {
@@ -574,6 +600,30 @@ export default function Dashboard({
     });
   };
 
+  const formatComparisonNumber = (value: number) => value.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+
+  const formatComparisonAmount = (value: number) => `¥${value.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+  const renderDeltaBadge = (metric: SupplierComparisonPeriodMetric) => {
+    if (!metric.available || metric.percentChange === null) {
+      return <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-400">无可比数据</span>;
+    }
+    const colorClass = metric.direction === 'up'
+      ? 'bg-emerald-50 text-emerald-700'
+      : metric.direction === 'down'
+        ? 'bg-rose-50 text-rose-700'
+        : 'bg-slate-100 text-slate-600';
+    const prefix = metric.direction === 'up' ? '+' : '';
+    return (
+      <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${colorClass}`}>
+        {prefix}{metric.percentChange.toFixed(2)}%
+      </span>
+    );
+  };
+
   const getColSpanClass = (width: number) => {
     if (width === 1) return 'col-span-1';
     if (width === 2) return 'col-span-1 lg:col-span-2';
@@ -757,6 +807,110 @@ export default function Dashboard({
     );
   };
 
+  const renderSupplierComparisonModule = () => {
+    if (supplierComparison.supplierOptions.length === 0) {
+      return (
+        <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm h-full pointer-events-auto">
+          <div className="flex h-64 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-xs font-bold text-slate-400">
+            当前过滤条件下暂无供应商数据
+          </div>
+        </div>
+      );
+    }
+
+    const statCards = [
+      { label: '本月采购金额', value: formatComparisonAmount(supplierComparison.current.amount) },
+      { label: '本月采购数量', value: formatComparisonNumber(supplierComparison.current.quantity) },
+      { label: '订单数', value: `${supplierComparison.current.orderCount} 笔` },
+      { label: '物料行', value: `${supplierComparison.current.lineCount} 行` },
+    ];
+
+    return (
+      <div className="bg-white p-5 border border-slate-200 rounded-xl shadow-sm h-full space-y-4 pointer-events-auto">
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-0.5 min-w-0">
+            <h3 className="text-sm font-bold uppercase tracking-tight text-slate-850">供应商采购对比</h3>
+            <p className="text-[10px] font-mono text-slate-500 uppercase">采购金额 / 采购数量 环比与同比</p>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:min-w-[360px]">
+            <select
+              value={supplierComparison.selectedSupplier ?? ''}
+              onChange={event => setSelectedComparisonSupplier(event.target.value)}
+              className="rounded-md border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700"
+            >
+              {supplierComparison.supplierOptions.map(option => (
+                <option key={option.name} value={option.name}>{option.name}</option>
+              ))}
+            </select>
+            <select
+              value={supplierComparison.selectedMonth ?? ''}
+              onChange={event => setSelectedComparisonMonth(event.target.value)}
+              className="rounded-md border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-700"
+            >
+              {supplierComparison.monthOptions.map(month => (
+                <option key={month} value={month}>{month}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {statCards.map(card => (
+            <div key={card.label} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
+              <p className="text-[10px] font-bold uppercase text-slate-400">{card.label}</p>
+              <p className="mt-1 truncate font-mono text-base font-black text-slate-800">{card.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {[
+            { title: '环比上月', amount: supplierComparison.mom.amount, quantity: supplierComparison.mom.quantity },
+            { title: '同比去年', amount: supplierComparison.yoy.amount, quantity: supplierComparison.yoy.quantity },
+          ].map(group => (
+            <div key={group.title} className="rounded-lg border border-slate-100 p-3">
+              <p className="text-xs font-black text-slate-700">{group.title}</p>
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-500">采购金额</span>
+                  {renderDeltaBadge(group.amount)}
+                </div>
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-500">采购数量</span>
+                  {renderDeltaBadge(group.quantity)}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="h-64 w-full">
+          {supplierComparison.series.length === 0 ? (
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-xs font-bold text-slate-400">
+              暂无采购数据
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+              <LineChart data={supplierComparison.series} margin={{ top: 8, right: 20, left: 0, bottom: 6 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis yAxisId="amount" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#2563EB' }} width={76} tickFormatter={(val) => `¥${(Number(val) / 10000).toFixed(1)}w`} />
+                <YAxis yAxisId="quantity" orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#F97316' }} width={48} />
+                <RechartsTooltip
+                  contentStyle={{ borderRadius: '8px', border: '1px solid #E2E8F0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontSize: '12px' }}
+                  formatter={(value: number, name: string) => name === 'amount' ? [formatComparisonAmount(value), '采购金额'] : [formatComparisonNumber(value), '采购数量']}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px' }} formatter={(value) => value === 'amount' ? '采购金额' : '采购数量'} />
+                <Line yAxisId="amount" type="monotone" dataKey="amount" stroke="#2563EB" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+                <Line yAxisId="quantity" type="monotone" dataKey="quantity" stroke="#F97316" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const modulesMap = {
     'kpis': {
       colSpan: 'col-span-1 lg:col-span-2 xl:col-span-3 transition-transform duration-300',
@@ -918,12 +1072,16 @@ export default function Dashboard({
           </div>
         </div>
           </div>
-        </div>
-      )
-    },
-    'trend': {
+	        </div>
+	      )
+	    },
+    'supplierComparison': {
       colSpan: 'col-span-1 lg:col-span-2 xl:col-span-2 transition-transform duration-300',
-      content: renderAnalysisModule('trend')
+      content: renderSupplierComparisonModule()
+    },
+	    'trend': {
+	      colSpan: 'col-span-1 lg:col-span-2 xl:col-span-2 transition-transform duration-300',
+	      content: renderAnalysisModule('trend')
     },
     'supplier': {
       colSpan: 'col-span-1 transition-transform duration-300',
