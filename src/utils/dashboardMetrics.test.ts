@@ -3,6 +3,7 @@ import { PurchaseOrder } from '../types';
 import {
   buildDashboardMetrics,
   buildLedgerBreakdown,
+  buildSupplierComparison,
   DEFAULT_DASHBOARD_DATA_FILTERS,
   sanitizeDashboardDataFilters,
 } from './dashboardMetrics';
@@ -337,5 +338,94 @@ assert.equal(sanitized.ignoreZeroOrInvalidPrice, false, '布尔字段保留');
 assert.equal(sanitized.ignoreGiftItems, true, '非布尔回退到默认');
 assert.equal(sanitized.ignoreEmptyCategory, false, '缺失字段使用默认值');
 assert.equal(sanitized.ignoreOtherMonth, false, '新增的其他月份过滤默认关闭');
+
+const supplierComparisonOrders = [
+  po({
+    id: 'SC-A-2025-06',
+    date: '2025-06-12',
+    supplier: '供应商A',
+    items: [
+      { code: 'A-OLD', name: '去年同月', spec: '', category: '原材料', unit: 'PCS', orderedQty: 4, price: 50, taxAmount: 0, remark: '', receivedQty: 0 },
+    ],
+  }),
+  po({
+    id: 'SC-A-2026-05',
+    date: '2026-05-08',
+    supplier: '供应商A',
+    items: [
+      { code: 'A-PREV', name: '上月', spec: '', category: '原材料', unit: 'PCS', orderedQty: 5, price: 40, taxAmount: 0, remark: '', receivedQty: 0 },
+    ],
+  }),
+  po({
+    id: 'SC-A-2026-06-1',
+    date: '2026-06-02',
+    supplier: '供应商A',
+    items: [
+      { code: 'A-CUR-1', name: '本月1', spec: '', category: '原材料', unit: 'PCS', orderedQty: 6, price: 50, taxAmount: 0, remark: '', receivedQty: 0 },
+      { code: 'A-CUR-2', name: '本月2', spec: '', category: '原材料', unit: 'PCS', orderedQty: 4, price: 25, taxAmount: 0, remark: '', receivedQty: 0 },
+      { code: 'A-GIFT', name: '赠品', spec: '', category: '原材料', unit: 'PCS', orderedQty: 100, price: 1, taxAmount: 0, remark: '赠品', receivedQty: 0 },
+    ],
+  }),
+  po({
+    id: 'SC-A-2026-06-2',
+    date: '2026-06-18',
+    supplier: '供应商A',
+    items: [
+      { code: 'A-CUR-3', name: '本月3', spec: '', category: '包装物', unit: 'PCS', orderedQty: 2, price: 100, taxAmount: 0, remark: '', receivedQty: 0 },
+    ],
+  }),
+  po({
+    id: 'SC-B-2026-06',
+    date: '2026-06-05',
+    supplier: '供应商B',
+    items: [
+      { code: 'B-CUR', name: '供应商B', spec: '', category: '原材料', unit: 'PCS', orderedQty: 21, price: 50, taxAmount: 0, remark: '', receivedQty: 0 },
+    ],
+  }),
+];
+
+const supplierComparison = buildSupplierComparison(supplierComparisonOrders, {
+  supplier: '供应商A',
+  month: '2026-06',
+});
+
+assert.equal(supplierComparison.selectedSupplier, '供应商A');
+assert.equal(supplierComparison.selectedMonth, '2026-06');
+assert.deepEqual(supplierComparison.supplierOptions.map(option => option.name), ['供应商B', '供应商A']);
+assert.deepEqual(supplierComparison.monthOptions, ['2026-06', '2026-05', '2025-06']);
+assert.deepEqual(
+  {
+    amount: supplierComparison.current.amount,
+    quantity: supplierComparison.current.quantity,
+    orderCount: supplierComparison.current.orderCount,
+    lineCount: supplierComparison.current.lineCount,
+  },
+  { amount: 600, quantity: 12, orderCount: 2, lineCount: 3 },
+  'current supplier month should summarize amount, quantity, unique order count, and included line count',
+);
+assert.equal(supplierComparison.mom.amount.available, true);
+assert.equal(supplierComparison.mom.amount.previousValue, 200);
+assert.equal(supplierComparison.mom.amount.delta, 400);
+assert.equal(supplierComparison.mom.amount.percentChange, 200);
+assert.equal(supplierComparison.mom.quantity.previousValue, 5);
+assert.equal(supplierComparison.mom.quantity.percentChange, 140);
+assert.equal(supplierComparison.yoy.amount.previousValue, 200);
+assert.equal(supplierComparison.yoy.amount.percentChange, 200);
+assert.deepEqual(
+  supplierComparison.series.map(point => ({ month: point.month, amount: point.amount, quantity: point.quantity })),
+  [
+    { month: '2025-06', amount: 200, quantity: 4 },
+    { month: '2026-05', amount: 200, quantity: 5 },
+    { month: '2026-06', amount: 600, quantity: 12 },
+  ],
+  'series should include selected supplier monthly amount and quantity in chronological order',
+);
+
+const missingComparison = buildSupplierComparison(supplierComparisonOrders, {
+  supplier: '供应商B',
+  month: '2026-06',
+});
+assert.equal(missingComparison.mom.amount.available, false);
+assert.equal(missingComparison.yoy.quantity.available, false);
 
 console.log('dashboard metrics tests passed');

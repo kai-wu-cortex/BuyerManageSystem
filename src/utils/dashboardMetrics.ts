@@ -91,6 +91,57 @@ interface BuildDashboardMetricsOptions {
   filters?: DashboardDataFilters;
 }
 
+export interface SupplierComparisonOptions {
+  supplier?: string;
+  month?: string;
+  filters?: DashboardDataFilters;
+  seriesLimit?: number;
+}
+
+export interface SupplierComparisonSupplierOption {
+  name: string;
+  amount: number;
+}
+
+export interface SupplierComparisonPeriodSummary {
+  amount: number;
+  quantity: number;
+  orderCount: number;
+  lineCount: number;
+}
+
+export interface SupplierComparisonPeriodMetric {
+  currentValue: number;
+  previousValue: number;
+  delta: number;
+  percentChange: number | null;
+  direction: 'up' | 'down' | 'flat';
+  available: boolean;
+}
+
+export interface SupplierComparisonPoint extends SupplierComparisonPeriodSummary {
+  month: string;
+}
+
+export interface SupplierComparisonResult {
+  supplierOptions: SupplierComparisonSupplierOption[];
+  monthOptions: string[];
+  selectedSupplier: string | null;
+  selectedMonth: string | null;
+  previousMonth: string | null;
+  previousYearMonth: string | null;
+  current: SupplierComparisonPeriodSummary;
+  mom: {
+    amount: SupplierComparisonPeriodMetric;
+    quantity: SupplierComparisonPeriodMetric;
+  };
+  yoy: {
+    amount: SupplierComparisonPeriodMetric;
+    quantity: SupplierComparisonPeriodMetric;
+  };
+  series: SupplierComparisonPoint[];
+}
+
 const GIFT_RE = /赠品|赠送|^赠|\s赠/;
 const VOID_RE = /作废|取消|废弃/;
 
@@ -158,6 +209,41 @@ function getLineGrossAmount(orderedQty: unknown, price: unknown): number {
   const unitPrice = toFiniteNumber(price);
   if (qty <= 0 || unitPrice < 0) return 0;
   return qty * unitPrice;
+}
+
+const EMPTY_SUPPLIER_COMPARISON_SUMMARY: SupplierComparisonPeriodSummary = {
+  amount: 0,
+  quantity: 0,
+  orderCount: 0,
+  lineCount: 0,
+};
+
+function addMonths(month: string, delta: number): string | null {
+  const match = month.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex)) return null;
+  const date = new Date(Date.UTC(year, monthIndex + delta, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function createComparisonMetric(currentValue: number, previousValue: number): SupplierComparisonPeriodMetric {
+  const current = roundCurrency(currentValue);
+  const previous = roundCurrency(previousValue);
+  const delta = roundCurrency(current - previous);
+  const direction = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+  if (previous <= 0) {
+    return { currentValue: current, previousValue: previous, delta, percentChange: null, direction, available: false };
+  }
+  return {
+    currentValue: current,
+    previousValue: previous,
+    delta,
+    percentChange: Math.round((delta / previous) * 10000) / 100,
+    direction,
+    available: true,
+  };
 }
 
 function addAmount(target: Record<string, number>, key: string, amount: number): void {
@@ -236,6 +322,126 @@ export function buildLedgerBreakdown(
   }
 
   return limitCategoryData(toSortedChartData(data), limit);
+}
+
+export function buildSupplierComparison(
+  purchaseOrders: PurchaseOrder[],
+  options: SupplierComparisonOptions = {},
+): SupplierComparisonResult {
+  const filters = options.filters ?? DEFAULT_DASHBOARD_DATA_FILTERS;
+  const seriesLimit = options.seriesLimit ?? 12;
+  const bySupplierMonth = new Map<string, Map<string, SupplierComparisonPeriodSummary & { orderIds: Set<string> }>>();
+  const supplierAmounts = new Map<string, number>();
+  const months = new Set<string>();
+
+  const ensureSummary = (supplier: string, month: string) => {
+    let supplierMap = bySupplierMonth.get(supplier);
+    if (!supplierMap) {
+      supplierMap = new Map();
+      bySupplierMonth.set(supplier, supplierMap);
+    }
+    let summary = supplierMap.get(month);
+    if (!summary) {
+      summary = { amount: 0, quantity: 0, orderCount: 0, lineCount: 0, orderIds: new Set<string>() };
+      supplierMap.set(month, summary);
+    }
+    return summary;
+  };
+
+  for (const po of purchaseOrders) {
+    if (filters.ignoreVoidedOrders && isOrderVoided(po)) continue;
+    if (filters.ignoreOtherMonth && isOtherMonthOrder(po)) continue;
+    const supplier = String(po.supplier || '').trim() || '未知供应商';
+    if (filters.ignoreEmptySupplier && supplier === '未知供应商') continue;
+    const month = getOrderMonth(po);
+    if (month === '其他') continue;
+
+    for (const item of po.items) {
+      if (isLineExcluded(item, po.remarks, filters)) continue;
+      const category = String(item.category || '').trim();
+      if (filters.ignoreEmptyCategory && !category) continue;
+      const amount = getLineGrossAmount(item.orderedQty, item.price);
+      const quantity = Math.max(0, toFiniteNumber(item.orderedQty));
+      if (amount <= 0 || quantity <= 0) continue;
+
+      const summary = ensureSummary(supplier, month);
+      summary.amount += amount;
+      summary.quantity += quantity;
+      summary.lineCount += 1;
+      summary.orderIds.add(po.id);
+      supplierAmounts.set(supplier, (supplierAmounts.get(supplier) ?? 0) + amount);
+      months.add(month);
+    }
+  }
+
+  for (const supplierMap of bySupplierMonth.values()) {
+    for (const summary of supplierMap.values()) {
+      summary.orderCount = summary.orderIds.size;
+      summary.amount = roundCurrency(summary.amount);
+      summary.quantity = roundCurrency(summary.quantity);
+    }
+  }
+
+  const supplierOptions = Array.from(supplierAmounts.entries())
+    .map(([name, amount]) => ({ name, amount: roundCurrency(amount) }))
+    .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
+  const monthOptions = Array.from(months).sort((a, b) => b.localeCompare(a));
+  const selectedSupplier = supplierOptions.some(option => option.name === options.supplier)
+    ? options.supplier!
+    : supplierOptions[0]?.name ?? null;
+  const selectedMonth = monthOptions.includes(options.month ?? '')
+    ? options.month!
+    : monthOptions[0] ?? null;
+  const previousMonth = selectedMonth ? addMonths(selectedMonth, -1) : null;
+  const previousYearMonth = selectedMonth ? addMonths(selectedMonth, -12) : null;
+
+  const supplierMap = selectedSupplier ? bySupplierMonth.get(selectedSupplier) : undefined;
+  const getSummary = (month: string | null): SupplierComparisonPeriodSummary => {
+    if (!month) return { ...EMPTY_SUPPLIER_COMPARISON_SUMMARY };
+    const summary = supplierMap?.get(month);
+    if (!summary) return { ...EMPTY_SUPPLIER_COMPARISON_SUMMARY };
+    return {
+      amount: roundCurrency(summary.amount),
+      quantity: roundCurrency(summary.quantity),
+      orderCount: summary.orderCount,
+      lineCount: summary.lineCount,
+    };
+  };
+
+  const current = getSummary(selectedMonth);
+  const momBase = getSummary(previousMonth);
+  const yoyBase = getSummary(previousYearMonth);
+  const series = selectedSupplier && supplierMap
+    ? Array.from(supplierMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-seriesLimit)
+      .map(([month, summary]) => ({
+        month,
+        amount: roundCurrency(summary.amount),
+        quantity: roundCurrency(summary.quantity),
+        orderCount: summary.orderCount,
+        lineCount: summary.lineCount,
+      }))
+    : [];
+
+  return {
+    supplierOptions,
+    monthOptions,
+    selectedSupplier,
+    selectedMonth,
+    previousMonth,
+    previousYearMonth,
+    current,
+    mom: {
+      amount: createComparisonMetric(current.amount, momBase.amount),
+      quantity: createComparisonMetric(current.quantity, momBase.quantity),
+    },
+    yoy: {
+      amount: createComparisonMetric(current.amount, yoyBase.amount),
+      quantity: createComparisonMetric(current.quantity, yoyBase.quantity),
+    },
+    series,
+  };
 }
 
 export function buildDashboardMetrics(
