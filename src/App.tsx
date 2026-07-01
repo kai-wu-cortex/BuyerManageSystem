@@ -789,6 +789,7 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadingMessage, setUploadingMessage] = useState('请稍候，正在解析订单数据并合并到本地…');
 
   const validateLedgerRowsBeforeImport = (rows: unknown[][]): boolean => {
     const analysis = analyzeLedgerHeaders(rows);
@@ -810,32 +811,30 @@ export default function App() {
     return true;
   };
 
-  const backupToCloudbase = async (orders: PurchaseOrder[]) => {
+  const backupToCloudbase = async (orders: PurchaseOrder[]): Promise<LedgerBackup> => {
     if (!isCloudbaseConfigured()) {
-      console.warn("CloudBase backup skipped because VITE_CLOUDBASE_ENV_ID is not configured.");
-      return;
+      throw new Error("数据库尚未配置，无法上传台账。");
     }
 
-    try {
-      const backup = await saveLedgerBackup(orders);
-      console.log(`Successfully backed up ledger to CloudBase: ${backup.id}`);
-      markLedgerBackupLoaded(backup.rawTime);
-      setLatestRemoteLedgerBackup(current => {
-        if (!current || backup.rawTime >= current.rawTime) {
-          return backup;
-        }
-        return current;
-      });
-      // 历史备份的过期清理由 MongoDB TTL 索引 (createdAt) 自动处理
-    } catch (error) {
-      console.error("Failed to backup ledger to CloudBase:", error);
-    }
+    const backup = await saveLedgerBackup(orders);
+    console.log(`Successfully backed up ledger to CloudBase: ${backup.id}`);
+    markLedgerBackupLoaded(backup.rawTime);
+    setLatestRemoteLedgerBackup(current => {
+      if (!current || backup.rawTime >= current.rawTime) {
+        return backup;
+      }
+      return current;
+    });
+    // 历史备份的过期清理由 MongoDB TTL 索引 (createdAt) 自动处理
+    return backup;
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     
+    setSuccessToast(null);
+    setUploadingMessage('正在解析台账文件，请稍候…');
     setIsUploading(true);
     try {
       const extension = file.name.split('.').pop()?.toLowerCase();
@@ -965,25 +964,22 @@ export default function App() {
         // 按订单编号 (CGDD-) 合并，保留旧台账独有订单及其星标，避免数据/星标丢失
         const { merged, stats } = mergePurchaseOrdersById(purchaseOrdersRef.current, parsedOrders);
         handleUpdateOrders(merged);
-        alert(
-          `🎉 成功解析并合并本地台账：\n` +
-          `  • 新增 ${stats.added} 笔\n` +
-          `  • 更新 ${stats.updated} 笔\n` +
-          `  • 内容不变 ${stats.unchanged} 笔\n` +
-          `  • 旧台账独有（已保留）${stats.retained} 笔\n` +
-          `合并后共 ${merged.length} 笔，即将自动备份至云端。`,
-        );
 
         // Save to CloudBase as backup
-        await backupToCloudbase(merged);
+        setUploadingMessage(`已解析 ${parsedOrders.length} 笔，正在写入云端备份，请勿关闭页面…`);
+        const backup = await backupToCloudbase(merged);
+        setSuccessToast(
+          `台账上传成功：新增 ${stats.added} / 更新 ${stats.updated} / 保留 ${stats.retained}，云端已保存 ${merged.length} 笔。备份时间：${backup.timeCreated}`,
+        );
       } else {
         alert("未能在文件中解析出任何有效的订单账目。请检查列分录是否和标准 36 列采购合规台账兼容。");
       }
     } catch (e) {
       console.error(e);
-      alert("加载台账失败: " + getErrorMessage(e));
+      setSuccessToast(`台账上传失败：${getErrorMessage(e)}`);
     } finally {
       setIsUploading(false);
+      setUploadingMessage('请稍候，正在解析订单数据并合并到本地…');
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -1084,7 +1080,11 @@ export default function App() {
       
       {/* Lightweight toast feedback kept in the app shell without loading the animation library. */}
       {successToast && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] bg-emerald-600 text-white px-5 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border border-emerald-500/35 max-w-md w-full sm:w-auto">
+        <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-[9999] text-white px-5 py-3.5 rounded-2xl shadow-xl flex items-center gap-3 border max-w-md w-full sm:w-auto ${
+          successToast.startsWith('台账上传失败')
+            ? 'bg-red-600 border-red-500/35'
+            : 'bg-emerald-600 border-emerald-500/35'
+        }`}>
             <div className="flex items-center justify-center bg-white/20 p-2 rounded-xl shrink-0">
               <ShieldCheck className="w-5 h-5 text-white" />
             </div>
@@ -1352,9 +1352,10 @@ export default function App() {
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="rounded-lg bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-blue-700"
+                  disabled={isUploading}
+                  className="rounded-lg bg-blue-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  选择文件上传
+                  {isUploading ? '上传中...' : '选择文件上传'}
                 </button>
               </div>
             ) : (
@@ -1471,7 +1472,7 @@ export default function App() {
             <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
             <div className="text-center">
               <p className="text-sm font-bold text-slate-800">正在加载台账</p>
-              <p className="text-xs text-slate-500 mt-1">请稍候，正在解析订单数据并合并到本地…</p>
+              <p className="text-xs text-slate-500 mt-1">{uploadingMessage}</p>
             </div>
           </div>
         </div>

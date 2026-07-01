@@ -281,6 +281,10 @@ function appendNoStoreCacheBuster(url: URL): void {
   url.searchParams.set('_', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 }
 
+export interface SetDocumentOptions {
+  timeoutMs?: number;
+}
+
 function isBrowserOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
@@ -376,14 +380,31 @@ export async function setDocument<T extends object>(
   collectionName: CollectionName,
   documentId: string,
   value: T,
+  options: SetDocumentOptions = {},
 ): Promise<void> {
   const path = getDataApiPath(collectionName, documentId);
-  const response = await fetch(path, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(cleanUndefined(value)),
-  });
-  await readJsonResponse<null>(response, path);
+  const controller = options.timeoutMs ? new AbortController() : null;
+  const timeout = controller && options.timeoutMs
+    ? setTimeout(() => controller.abort(), options.timeoutMs)
+    : null;
+  try {
+    const response = await fetch(path, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cleanUndefined(value)),
+      signal: controller?.signal,
+    });
+    await readJsonResponse<null>(response, path);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(`${path}: 请求超时，请检查网络后重试。`);
+    }
+    throw error;
+  } finally {
+    if (timeout !== null) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export async function deleteDocument(collectionName: CollectionName, documentId: string): Promise<void> {
@@ -521,7 +542,7 @@ async function writeChunkWithRetry(chunk: LedgerBackupChunk): Promise<void> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      await setDocument('ledger_backup_chunks', chunk.id, chunk);
+      await setDocument('ledger_backup_chunks', chunk.id, chunk, { timeoutMs: 60_000 });
       return;
     } catch (error) {
       lastError = error;
@@ -558,7 +579,7 @@ export async function saveLedgerBackup(orders: PurchaseOrder[]): Promise<LedgerB
     }
 
     // 所有 chunks 成功后才写 metadata，确保 metadata 一旦存在 → chunks 一定齐全
-    await setDocument('ledger_backups', backup.id, backup);
+    await setDocument('ledger_backups', backup.id, backup, { timeoutMs: 60_000 });
     return backup;
   } catch (error) {
     // 回滚：尽力清理已写入的 chunks（best-effort，失败也不阻塞最终抛错）

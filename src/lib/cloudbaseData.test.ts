@@ -153,6 +153,19 @@ await assert.rejects(
 );
 globalThis.fetch = originalFetch;
 
+const timeoutFetch = globalThis.fetch;
+globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+  init?.signal?.addEventListener('abort', () => {
+    reject(new DOMException('The operation was aborted.', 'AbortError'));
+  });
+})) as typeof fetch;
+await assert.rejects(
+  () => setDocument('ledger_backups', 'timeout', { id: 'timeout' }, { timeoutMs: 10 }),
+  /请求超时/,
+  'setDocument should fail with a clear timeout instead of waiting forever',
+);
+globalThis.fetch = timeoutFetch;
+
 const paginationFetch = globalThis.fetch;
 const requestedOffsets: string[] = [];
 const requestedCacheBusters: string[] = [];
