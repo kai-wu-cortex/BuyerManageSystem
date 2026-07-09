@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { saveQuotationDraft } from './api';
+import { clearQuotationCache, loadQuotationItems, loadQuotationWorkspace, saveQuotationDraft } from './api';
 import type { QuotationDraft, SupplierQuotationItem } from './types';
 
 const now = '2026-06-14T08:00:00.000Z';
@@ -82,6 +82,47 @@ const savedNewItem = requests.find(request => request.url.endsWith('/supplier_qu
 assert.equal(savedNewItem?.body.sourceProductName, '镭射银LB100');
 const deletedOldItem = requests.find(request => request.url.endsWith('/supplier_quotation_items/old-item'));
 assert.equal(typeof deletedOldItem?.body.deletedAt, 'string', 'replaced quotation items should soft-delete stale records');
+
+globalThis.fetch = originalFetch;
+
+const loadRequests: string[] = [];
+clearQuotationCache();
+globalThis.fetch = (async (input: string | URL | Request) => {
+  loadRequests.push(String(input));
+  return new Response(JSON.stringify({ success: true, data: [] }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}) as typeof fetch;
+
+await loadQuotationWorkspace();
+const firstWorkspaceRequestCount = loadRequests.length;
+assert.equal(
+  loadRequests.some(url => url.includes('/supplier_quotation_items') && !url.includes('quotationId=')),
+  false,
+  'quotation archive initial load should not fetch all quotation item rows',
+);
+
+await loadQuotationWorkspace();
+assert.equal(
+  loadRequests.length,
+  firstWorkspaceRequestCount,
+  're-entering quotation archive in the same session should use the cached quotation workspace',
+);
+
+await loadQuotationWorkspace({ force: true });
+assert.equal(
+  loadRequests.length,
+  firstWorkspaceRequestCount * 2,
+  'explicit refresh should reload quotation workspace from the server',
+);
+
+await loadQuotationItems('quote-1');
+assert.equal(
+  loadRequests.some(url => url.includes('/supplier_quotation_items') && url.includes('quotationId=quote-1')),
+  true,
+  'quotation item rows should be loaded lazily for the selected quotation',
+);
 
 globalThis.fetch = originalFetch;
 

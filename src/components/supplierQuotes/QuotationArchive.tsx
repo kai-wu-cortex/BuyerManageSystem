@@ -44,7 +44,11 @@ import { formatDate, getStatusColor, getStatusLabel } from './quotationUi';
 interface Props {
   workspace: QuotationWorkspace;
   loading: boolean;
+  loadingItems: boolean;
+  allItemsLoaded: boolean;
   onRefresh: () => Promise<void>;
+  onLoadQuotationItems: (quotationId: string) => Promise<SupplierQuotationItem[]>;
+  onLoadAllItems: () => Promise<void>;
   initialPreviewId?: string | null;
   onPreviewClosed?: () => void;
   onFilePreview?: (file: { pathname: string; fileName: string; mimeType: string }) => void;
@@ -804,11 +808,13 @@ function ExcelPreview({ pathname }: { pathname: string }) {
 function MiniFilePreview({
   pathname, fileName, mimeType,
   fallbackItems,
+  enableFileFetch = true,
 }: {
   pathname: string;
   fileName: string;
   mimeType: string;
   fallbackItems: SupplierQuotationItem[];
+  enableFileFetch?: boolean;
 }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [excelRows, setExcelRows] = useState<unknown[][] | null>(null);
@@ -819,7 +825,7 @@ function MiniFilePreview({
   const isPdf = mimeType === 'application/pdf';
   const isExcel = mimeType.includes('spreadsheet') || mimeType.includes('ms-excel')
     || fileName.endsWith('.xlsx') || fileName.endsWith('.xls');
-  const hasRealFile = Boolean(pathname);
+  const hasRealFile = enableFileFetch && Boolean(pathname);
 
   useEffect(() => {
     if (!hasRealFile) { setLoading(false); return; }
@@ -948,7 +954,18 @@ function MiniFilePreview({
   );
 }
 
-export default function QuotationArchive({ workspace, loading, onRefresh, initialPreviewId, onPreviewClosed, onFilePreview }: Props) {
+export default function QuotationArchive({
+  workspace,
+  loading,
+  loadingItems,
+  allItemsLoaded,
+  onRefresh,
+  onLoadQuotationItems,
+  onLoadAllItems,
+  initialPreviewId,
+  onPreviewClosed,
+  onFilePreview,
+}: Props) {
   const [status, setStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showUpload, setShowUpload] = useState(false);
@@ -1072,7 +1089,8 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
     if (!window.confirm('确定要删除这份报价单吗？')) return;
     setDeletingId(quotationId);
     try {
-      const items = workspace.items.filter(item => item.quotationId === quotationId);
+      const existingItems = workspace.items.filter(item => item.quotationId === quotationId);
+      const items = existingItems.length > 0 ? existingItems : await onLoadQuotationItems(quotationId);
       await deleteQuotation(quotationId, items);
       await onRefresh();
     } catch (err) {
@@ -1105,6 +1123,19 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [searchTerm, status, supplierMap, workspace.quotations, workspace.items]);
+
+  useEffect(() => {
+    if (previewQuotationId) {
+      void onLoadQuotationItems(previewQuotationId);
+    }
+  }, [onLoadQuotationItems, previewQuotationId]);
+
+  useEffect(() => {
+    const term = searchTerm.trim();
+    if (term && !allItemsLoaded) {
+      void onLoadAllItems();
+    }
+  }, [allItemsLoaded, onLoadAllItems, searchTerm]);
 
   const previewQuotation = previewQuotationId
     ? workspace.quotations.find(q => q.id === previewQuotationId) ?? null
@@ -1244,7 +1275,10 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
             <Search className="h-4 w-4 text-slate-400" />
-            <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="搜索供应商、报价单号、产品名称、价格..." className="w-80 rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-blue-400" />
+              <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="搜索供应商、报价单号、产品名称、价格..." className="w-80 rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-blue-400" />
+              {loadingItems && searchTerm.trim() && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+              )}
           </div>
           <select value={status} onChange={e => setStatus(e.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none">
             <option value="all">全部状态</option>
@@ -1346,6 +1380,7 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
                       fileName={quotation.sourceFile.fileName}
                       mimeType={quotation.sourceFile.mimeType}
                       fallbackItems={cardItems}
+                      enableFileFetch={false}
                     />
                     <span className={`absolute left-2 top-2 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold shadow-sm ${getStatusColor(displayStatus)}`}>
                       {getStatusLabel(displayStatus)}
@@ -1579,13 +1614,22 @@ export default function QuotationArchive({ workspace, loading, onRefresh, initia
 
       {/* Preview panel */}
       {previewQuotation && (
-        <PreviewPanel
-          quotation={previewQuotation}
-          items={previewItems}
-          supplier={previewSupplier}
-          onClose={() => { setPreviewQuotationId(null); onPreviewClosed?.(); }}
-          onSaved={onRefresh}
-        />
+        loadingItems && previewItems.length === 0 ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+            <div className="flex items-center gap-3 rounded-2xl bg-white px-6 py-5 text-sm font-semibold text-slate-700 shadow-xl">
+              <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+              正在加载报价明细...
+            </div>
+          </div>
+        ) : (
+          <PreviewPanel
+            quotation={previewQuotation}
+            items={previewItems}
+            supplier={previewSupplier}
+            onClose={() => { setPreviewQuotationId(null); onPreviewClosed?.(); }}
+            onSaved={onRefresh}
+          />
+        )
       )}
     </div>
   );

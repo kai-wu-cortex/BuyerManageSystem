@@ -6,7 +6,8 @@ import {
 import QuotationArchive from './QuotationArchive';
 import SupplierProfiles from './SupplierProfiles';
 import FilePreview from './FilePreview';
-import { loadQuotationWorkspace, type QuotationWorkspace } from '../../quotation/api';
+import { loadQuotationItems, loadQuotationWorkspace, type QuotationWorkspace } from '../../quotation/api';
+import type { SupplierQuotationItem } from '../../quotation/types';
 
 type QuotationView = 'archive' | 'profiles';
 
@@ -31,15 +32,18 @@ export default function SupplierQuotationApp() {
   const [activeView, setActiveView] = useState<QuotationView>('archive');
   const [workspace, setWorkspace] = useState<QuotationWorkspace>(EMPTY_WORKSPACE);
   const [loading, setLoading] = useState(true);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [allItemsLoaded, setAllItemsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewQuotationId, setPreviewQuotationId] = useState<string | null>(null);
   const [filePreview, setFilePreview] = useState<{ pathname: string; fileName: string; mimeType: string } | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     setLoading(true);
     setError(null);
     try {
-      setWorkspace(await loadQuotationWorkspace());
+      setWorkspace(await loadQuotationWorkspace({ force }));
+      setAllItemsLoaded(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -51,10 +55,57 @@ export default function SupplierQuotationApp() {
     void refresh();
   }, [refresh]);
 
+  const mergeItems = useCallback((items: SupplierQuotationItem[]) => {
+    setWorkspace(current => {
+      const byId = new Map(current.items.map(item => [item.id, item]));
+      items.forEach(item => byId.set(item.id, item));
+      return { ...current, items: Array.from(byId.values()) };
+    });
+  }, []);
+
+  const ensureQuotationItems = useCallback(async (quotationId: string): Promise<SupplierQuotationItem[]> => {
+    const existing = workspace.items.filter(item => item.quotationId === quotationId);
+    if (allItemsLoaded || existing.length > 0) return existing;
+    setLoadingItems(true);
+    setError(null);
+    try {
+      const items = await loadQuotationItems(quotationId);
+      mergeItems(items);
+      return items;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return [];
+    } finally {
+      setLoadingItems(false);
+    }
+  }, [allItemsLoaded, mergeItems, workspace.items]);
+
+  const ensureAllItems = useCallback(async () => {
+    if (allItemsLoaded) return;
+    setLoadingItems(true);
+    setError(null);
+    try {
+      setWorkspace(current => ({ ...current, items: [] }));
+      mergeItems(await loadQuotationItems());
+      setAllItemsLoaded(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoadingItems(false);
+    }
+  }, [allItemsLoaded, mergeItems]);
+
   const handlePreviewFromProfiles = (quotationId: string) => {
     setPreviewQuotationId(quotationId);
     setActiveView('archive');
+    void ensureQuotationItems(quotationId);
   };
+
+  useEffect(() => {
+    if (activeView === 'profiles') {
+      void ensureAllItems();
+    }
+  }, [activeView, ensureAllItems]);
 
   const renderContent = () => {
     switch (activeView) {
@@ -63,7 +114,11 @@ export default function SupplierQuotationApp() {
           <QuotationArchive
             workspace={workspace}
             loading={loading}
-            onRefresh={refresh}
+            loadingItems={loadingItems}
+            allItemsLoaded={allItemsLoaded}
+            onRefresh={() => refresh(true)}
+            onLoadQuotationItems={ensureQuotationItems}
+            onLoadAllItems={ensureAllItems}
             initialPreviewId={previewQuotationId}
             onPreviewClosed={() => setPreviewQuotationId(null)}
             onFilePreview={setFilePreview}
@@ -75,7 +130,7 @@ export default function SupplierQuotationApp() {
             suppliers={workspace.suppliers}
             quotations={workspace.quotations}
             items={workspace.items}
-            onSaved={refresh}
+            onSaved={() => refresh(true)}
             onOpenQuotation={() => {}}
             onPreviewQuotation={handlePreviewFromProfiles}
             onFilePreview={setFilePreview}

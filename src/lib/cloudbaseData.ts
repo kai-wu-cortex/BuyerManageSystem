@@ -335,6 +335,8 @@ export interface ListDocumentsOptions {
   fields?: string[];
   /** 把数组字段在服务端转成 `${field}Count`，并去掉原数组——避免传输巨大 orders 数组 */
   sizeFields?: string[];
+  /** 精确匹配过滤条件。服务端只接受白名单字段。 */
+  filters?: Record<string, string>;
 }
 
 export async function listDocuments<T>(collectionName: CollectionName, options?: ListDocumentsOptions): Promise<T[]> {
@@ -347,6 +349,11 @@ export async function listDocuments<T>(collectionName: CollectionName, options?:
     }
     if (options?.sizeFields?.length) {
       url.searchParams.set('sizeFields', options.sizeFields.join(','));
+    }
+    if (options?.filters) {
+      for (const [key, value] of Object.entries(options.filters)) {
+        url.searchParams.set(key, value);
+      }
     }
     url.searchParams.set('offset', String(offset));
     url.searchParams.set('limit', String(pageSize));

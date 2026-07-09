@@ -20,13 +20,71 @@ export interface QuotationWorkspace {
   suppliers: SupplierProfile[];
 }
 
-export async function loadQuotationWorkspace(): Promise<QuotationWorkspace> {
-  const [quotations, items, suppliers] = await Promise.all([
+let quotationWorkspaceCache: QuotationWorkspace | null = null;
+let quotationWorkspacePromise: Promise<QuotationWorkspace> | null = null;
+const quotationItemsCache = new Map<string, SupplierQuotationItem[]>();
+let allQuotationItemsCache: SupplierQuotationItem[] | null = null;
+
+function rememberQuotationItems(items: SupplierQuotationItem[]): void {
+  items.forEach(item => {
+    const existing = quotationItemsCache.get(item.quotationId) ?? [];
+    const byId = new Map(existing.map(existingItem => [existingItem.id, existingItem]));
+    byId.set(item.id, item);
+    quotationItemsCache.set(item.quotationId, Array.from(byId.values()));
+  });
+}
+
+export function clearQuotationCache(): void {
+  quotationWorkspaceCache = null;
+  quotationWorkspacePromise = null;
+  quotationItemsCache.clear();
+  allQuotationItemsCache = null;
+}
+
+export async function loadQuotationWorkspace(options: { force?: boolean } = {}): Promise<QuotationWorkspace> {
+  if (!options.force && quotationWorkspaceCache) {
+    return quotationWorkspaceCache;
+  }
+  if (!options.force && quotationWorkspacePromise) {
+    return quotationWorkspacePromise;
+  }
+
+  quotationWorkspacePromise = Promise.all([
     listDocuments<SupplierQuotation>(cloudbaseCollections.supplierQuotations),
-    listDocuments<SupplierQuotationItem>(cloudbaseCollections.supplierQuotationItems),
     listDocuments<SupplierProfile>(cloudbaseCollections.supplierProfiles),
-  ]);
-  return { quotations, items, suppliers };
+  ])
+    .then(([quotations, suppliers]) => ({ quotations, items: [], suppliers }))
+    .then(workspace => {
+      quotationWorkspaceCache = workspace;
+      quotationWorkspacePromise = null;
+      return workspace;
+    })
+    .catch(error => {
+      quotationWorkspacePromise = null;
+      throw error;
+    });
+  return quotationWorkspacePromise;
+}
+
+export async function loadQuotationItems(quotationId?: string, options: { force?: boolean } = {}): Promise<SupplierQuotationItem[]> {
+  if (!options.force && quotationId && quotationItemsCache.has(quotationId)) {
+    return quotationItemsCache.get(quotationId) ?? [];
+  }
+  if (!options.force && !quotationId && allQuotationItemsCache) {
+    return allQuotationItemsCache;
+  }
+
+  const items = await listDocuments<SupplierQuotationItem>(
+    cloudbaseCollections.supplierQuotationItems,
+    quotationId ? { filters: { quotationId } } : undefined,
+  );
+  if (quotationId) {
+    quotationItemsCache.set(quotationId, items);
+  } else {
+    allQuotationItemsCache = items;
+    rememberQuotationItems(items);
+  }
+  return items;
 }
 
 export async function saveQuotationDraft(
@@ -45,6 +103,7 @@ export async function saveQuotationDraft(
       { deletedAt: now, updatedAt: now },
     )),
   ]);
+  clearQuotationCache();
 }
 
 export async function confirmQuotationDraft(draft: QuotationDraft): Promise<QuotationDraft> {
@@ -63,10 +122,12 @@ export async function confirmQuotationDraft(draft: QuotationDraft): Promise<Quot
 
 export async function saveSupplierProfile(profile: SupplierProfile): Promise<void> {
   await setDocument(cloudbaseCollections.supplierProfiles, profile.id, profile);
+  clearQuotationCache();
 }
 
 export async function saveQuotationItem(item: SupplierQuotationItem): Promise<void> {
   await setDocument(cloudbaseCollections.supplierQuotationItems, item.id, item);
+  clearQuotationCache();
 }
 
 export async function deleteQuotation(quotationId: string, items: SupplierQuotationItem[]): Promise<void> {
@@ -76,11 +137,13 @@ export async function deleteQuotation(quotationId: string, items: SupplierQuotat
   await Promise.all(
     items.map(item => setDocument(cloudbaseCollections.supplierQuotationItems, item.id, { deletedAt: now, updatedAt: now }))
   );
+  clearQuotationCache();
 }
 
 export async function deleteSupplier(supplierId: string): Promise<void> {
   const now = new Date().toISOString();
   await setDocument(cloudbaseCollections.supplierProfiles, supplierId, { deletedAt: now, updatedAt: now });
+  clearQuotationCache();
 }
 
 export async function parseQuotationFile(pathname: string, mimeType: string, customPrompt?: string): Promise<ParsedQuotationValidation> {
